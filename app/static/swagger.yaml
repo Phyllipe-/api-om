@@ -1,0 +1,909 @@
+openapi: 3.0.0
+info:
+  title: API OM - Orientação e Mobilidade
+  description: >
+    API para gerir professores, alunos, mapas, sessões de treino e análises
+    do sistema de Orientação e Mobilidade (OM).
+
+    Todas as rotas protegidas exigem um token JWT no header `Authorization: Bearer <token>`.
+  version: 2.0.0
+
+servers:
+  - url: http://127.0.0.1:5000/api
+    description: Servidor local de desenvolvimento
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Aluno:
+      type: object
+      properties:
+        id_aluno:       { type: integer, example: 3 }
+        nome_completo:  { type: string,  example: "João Silva" }
+        email:          { type: string,  example: "joao@email.com" }
+        login:          { type: string,  example: "joao.silva", description: "Identificador curto. Derivado do email se não informado." }
+        idade:          { type: integer, example: 14 }
+        escolaridade:   { type: string,  example: "Ensino Fundamental II" }
+        ativo:          { type: boolean, example: true }
+
+    Professor:
+      type: object
+      properties:
+        id_professor:           { type: integer, example: 1 }
+        id_usuario:             { type: integer, example: 2 }
+        nome_completo:          { type: string,  example: "Prof. Ana Lima" }
+        email:                  { type: string,  example: "ana@escola.edu.br" }
+        data_nascimento:        { type: string,  format: date, example: "1985-07-10" }
+        registro_profissional:  { type: string,  example: "CREFITO-3/12345-F" }
+        ativo:                  { type: boolean, example: true }
+
+    Mapa:
+      type: object
+      properties:
+        id_mapa:             { type: integer, example: 1 }
+        nome_mapa:           { type: string,  example: "Casa Nível 1" }
+        caminho_arquivo_xml: { type: string,  example: "/mapas/1_casa_nivel1.xml" }
+        caminho_preview:     { type: string,  example: "/previews/1_casa_nivel1.png", nullable: true }
+        data_criacao:        { type: string,  example: "2026-01-15 10:30" }
+        ativo:               { type: boolean, example: true }
+        id_criador:          { type: integer, example: 1 }
+        nome_professor:      { type: string,  example: "Prof. Ana Lima" }
+
+    Sessao:
+      type: object
+      properties:
+        id_log:    { type: integer, example: 7 }
+        id_mapa:   { type: integer, example: 1 }
+        nome_mapa: { type: string,  example: "Casa Nível 1" }
+        data:      { type: string,  example: "2026-03-20 14:05" }
+
+    Atividade:
+      type: object
+      properties:
+        id_atividade:   { type: integer, example: 2 }
+        nome:           { type: string,  example: "Treino Básico" }
+        descricao:      { type: string,  example: "Percurso inicial com dois mapas." }
+        ativo:          { type: boolean, example: true }
+        data_criacao:   { type: string,  example: "2026-02-10 09:00" }
+        nome_professor: { type: string,  example: "Prof. Ana Lima" }
+        total_mapas:    { type: integer, example: 2 }
+        total_alunos:   { type: integer, example: 5 }
+
+    Error:
+      type: object
+      properties:
+        erro: { type: string, example: "Mensagem de erro." }
+
+tags:
+  - name: Autenticação
+    description: Login e cadastro de professores
+  - name: Alunos
+    description: Gestão dos alunos vinculados ao professor autenticado
+  - name: Professores
+    description: Gestão de professores — restrita ao administrador (id_usuario = 1)
+  - name: Mapas e Treinos
+    description: Upload de mapas, sessões de treino e arquivos
+  - name: Atividades
+    description: Agrupamento de mapas atribuídos a alunos
+  - name: Análises
+    description: Métricas geradas a partir das sessões de treino
+
+paths:
+
+  # ============================================================
+  # AUTENTICAÇÃO
+  # ============================================================
+  /auth/login:
+    post:
+      tags: [Autenticação]
+      summary: Login
+      description: Autentica um professor e retorna o token JWT.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, senha]
+              properties:
+                email: { type: string, example: "professor@unilab.edu.br" }
+                senha: { type: string, example: "123456" }
+      responses:
+        '200':
+          description: Login realizado com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:    { type: string }
+                  usuario:
+                    type: object
+                    properties:
+                      id_usuario: { type: integer }
+                      id_tipo:    { type: integer }
+                      nome:       { type: string }
+        '401': { description: Email ou senha incorretos }
+        '403': { description: Conta desativada }
+
+  /auth/register:
+    post:
+      tags: [Autenticação]
+      summary: Cadastrar Professor
+      description: Cria um novo professor. Restrito ao administrador (id_usuario = 1).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nome_completo, data_nascimento, email, senha]
+              properties:
+                nome_completo:         { type: string,  example: "Prof. Carlos Melo" }
+                data_nascimento:       { type: string,  format: date, example: "1980-04-22" }
+                email:                 { type: string,  example: "carlos@escola.edu.br" }
+                senha:                 { type: string,  example: "senha123" }
+                registro_profissional: { type: string,  example: "CREFITO-3/99999-F" }
+      responses:
+        '201': { description: Professor cadastrado com sucesso }
+        '403': { description: Acesso negado — apenas o administrador pode cadastrar professores }
+        '409': { description: Email já cadastrado }
+
+  # ============================================================
+  # PROFESSORES
+  # ============================================================
+  /professores/:
+    get:
+      tags: [Professores]
+      summary: Listar Professores
+      description: Retorna todos os professores cadastrados. Restrito ao administrador.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de professores
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:       { type: integer }
+                  professores:
+                    type: array
+                    items: { $ref: '#/components/schemas/Professor' }
+        '403': { description: Acesso negado }
+
+  /professores/{id_professor}:
+    get:
+      tags: [Professores]
+      summary: Detalhar Professor
+      description: Retorna os dados de um professor específico. Restrito ao administrador.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_professor
+          in: path
+          required: true
+          schema: { type: integer, example: 2 }
+      responses:
+        '200':
+          description: Dados do professor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Professor' }
+        '403': { description: Acesso negado }
+        '404': { description: Professor não encontrado }
+
+    patch:
+      tags: [Professores]
+      summary: Editar Professor
+      description: >
+        Atualiza os dados de um professor. Restrito ao administrador.
+        Envie apenas os campos que deseja alterar.
+        Para redefinir a senha, inclua `nova_senha`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_professor
+          in: path
+          required: true
+          schema: { type: integer, example: 2 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nome_completo:         { type: string,  example: "Prof. Carlos Melo" }
+                email:                 { type: string,  example: "carlos@escola.edu.br" }
+                data_nascimento:       { type: string,  format: date, example: "1980-04-22" }
+                registro_profissional: { type: string,  example: "CREFITO-3/99999-F" }
+                nova_senha:            { type: string,  example: "novaSenha123" }
+                ativo:                 { type: boolean, example: true }
+      responses:
+        '200':
+          description: Professor atualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Professor' }
+        '400': { description: Tentativa de desativar o administrador }
+        '403': { description: Acesso negado }
+        '404': { description: Professor não encontrado }
+        '409': { description: Email já em uso }
+
+  /professores/{id_professor}/ativo:
+    patch:
+      tags: [Professores]
+      summary: Ativar / Desativar Professor
+      description: Alterna o estado ativo/inativo. Não é possível desativar o administrador.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_professor
+          in: path
+          required: true
+          schema: { type: integer, example: 2 }
+      responses:
+        '200':
+          description: Novo estado do professor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_professor: { type: integer }
+                  ativo:        { type: boolean }
+        '400': { description: Tentativa de desativar o administrador }
+        '403': { description: Acesso negado }
+        '404': { description: Professor não encontrado }
+
+  # ============================================================
+  # ALUNOS
+  # ============================================================
+  /alunos/:
+    post:
+      tags: [Alunos]
+      summary: Cadastrar Aluno
+      description: >
+        Cria um novo aluno e o vincula ao professor autenticado.
+        O campo `login` é opcional — se omitido, é derivado da parte antes do `@` no email.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nome_completo, data_nascimento, email, senha]
+              properties:
+                nome_completo:   { type: string,  example: "João Silva" }
+                data_nascimento: { type: string,  format: date, example: "2010-08-20" }
+                email:           { type: string,  example: "joao@email.com" }
+                senha:           { type: string,  example: "senha_aluno" }
+                login:           { type: string,  example: "joao.silva", description: "Opcional. Padrão: parte antes do @ no email." }
+                escolaridade:    { type: string,  example: "Ensino Fundamental II" }
+      responses:
+        '201': { description: Aluno cadastrado com sucesso }
+        '403': { description: Apenas professores podem cadastrar alunos }
+        '409': { description: Email ou login já cadastrado }
+
+    get:
+      tags: [Alunos]
+      summary: Listar Alunos
+      description: Retorna todos os alunos vinculados ao professor autenticado.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de alunos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:  { type: integer }
+                  alunos:
+                    type: array
+                    items: { $ref: '#/components/schemas/Aluno' }
+
+  /alunos/buscar:
+    get:
+      tags: [Alunos]
+      summary: Buscar Aluno por Email ou Login
+      description: >
+        Localiza um aluno do professor autenticado pelo email ou pelo login curto.
+        Se o parâmetro `q` contiver `@`, a busca é feita por email; caso contrário, por login.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Email completo ou login curto do aluno
+          schema: { type: string, example: "joao.silva" }
+      responses:
+        '200':
+          description: Aluno encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Aluno' }
+        '400': { description: Parâmetro q não informado }
+        '404': { description: Aluno não encontrado ou não vinculado ao professor }
+
+  /alunos/{id_aluno}:
+    get:
+      tags: [Alunos]
+      summary: Detalhar Aluno
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_aluno
+          in: path
+          required: true
+          schema: { type: integer, example: 3 }
+      responses:
+        '200':
+          description: Dados do aluno
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Aluno' }
+        '404': { description: Aluno não encontrado }
+
+    patch:
+      tags: [Alunos]
+      summary: Editar Aluno
+      description: >
+        Atualiza os dados do aluno. Envie apenas os campos que deseja alterar.
+        Para redefinir a senha, inclua `nova_senha`.
+        Para alterar o login, use a rota `PATCH /alunos/{id_aluno}/login`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_aluno
+          in: path
+          required: true
+          schema: { type: integer, example: 3 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nome_completo:   { type: string,  example: "João Silva Atualizado" }
+                email:           { type: string,  example: "novo@email.com" }
+                data_nascimento: { type: string,  format: date, example: "2010-08-20" }
+                escolaridade:    { type: string,  example: "Ensino Médio" }
+                nova_senha:      { type: string,  example: "novaSenha456" }
+      responses:
+        '200':
+          description: Aluno atualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Aluno' }
+        '400': { description: Formato de data inválido }
+        '404': { description: Aluno não encontrado ou sem permissão }
+        '409': { description: Email já em uso }
+
+  /alunos/{id_aluno}/ativo:
+    patch:
+      tags: [Alunos]
+      summary: Ativar / Desativar Aluno
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_aluno
+          in: path
+          required: true
+          schema: { type: integer, example: 3 }
+      responses:
+        '200':
+          description: Novo estado do aluno
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_aluno: { type: integer }
+                  ativo:    { type: boolean }
+        '404': { description: Aluno não encontrado ou sem permissão }
+
+  /alunos/{id_aluno}/login:
+    patch:
+      tags: [Alunos]
+      summary: Atualizar Login do Aluno
+      description: Altera o identificador curto (login) do aluno. Deve ser único no sistema.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_aluno
+          in: path
+          required: true
+          schema: { type: integer, example: 3 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [login]
+              properties:
+                login: { type: string, example: "joao.novo" }
+      responses:
+        '200':
+          description: Login atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_aluno: { type: integer }
+                  login:    { type: string }
+        '400': { description: Campo login não informado }
+        '404': { description: Aluno não encontrado ou sem permissão }
+        '409': { description: Login já em uso }
+
+  # ============================================================
+  # MAPAS E TREINOS
+  # ============================================================
+  /treinos/mapas:
+    post:
+      tags: [Mapas e Treinos]
+      summary: Upload de Novo Mapa
+      description: Envia um arquivo de mapa (.xml ou .json) e registra no sistema. Preview (.png/.jpg) é opcional.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [nome_mapa, arquivo_mapa]
+              properties:
+                nome_mapa:
+                  type: string
+                  example: "Casa Nível 1"
+                arquivo_mapa:
+                  type: string
+                  format: binary
+                  description: Arquivo do mapa (.xml ou .json)
+                arquivo_preview:
+                  type: string
+                  format: binary
+                  description: Imagem de preview (.png, .jpg, .jpeg, .webp) — opcional
+      responses:
+        '201':
+          description: Mapa registado com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_mapa:         { type: integer }
+                  caminho:         { type: string }
+                  caminho_preview: { type: string, nullable: true }
+        '400': { description: Arquivo ou nome do mapa não informados }
+        '403': { description: Apenas professores podem registar mapas }
+
+    get:
+      tags: [Mapas e Treinos]
+      summary: Listar Todos os Mapas
+      description: Retorna todos os mapas do sistema (todos os professores).
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de mapas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  mapas:
+                    type: array
+                    items: { $ref: '#/components/schemas/Mapa' }
+
+  /treinos/mapas/meus:
+    get:
+      tags: [Mapas e Treinos]
+      summary: Listar Meus Mapas
+      description: Retorna apenas os mapas criados pelo professor autenticado.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de mapas do professor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  mapas:
+                    type: array
+                    items: { $ref: '#/components/schemas/Mapa' }
+
+  /treinos/mapas/{id_mapa}/ativo:
+    patch:
+      tags: [Mapas e Treinos]
+      summary: Ativar / Desativar Mapa
+      description: Alterna ativo/inativo de um mapa do professor autenticado.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: Novo estado do mapa
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_mapa: { type: integer }
+                  ativo:   { type: boolean }
+        '404': { description: Mapa não encontrado ou sem permissão }
+
+  /treinos/mapas/{id_mapa}/apropriar:
+    post:
+      tags: [Mapas e Treinos]
+      summary: Apropriar Mapa
+      description: Cria uma cópia do registro de um mapa de outro professor para o professor autenticado. Os arquivos são compartilhados.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 5 }
+      responses:
+        '201':
+          description: Mapa apropriado com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_mapa:   { type: integer }
+                  nome_mapa: { type: string }
+        '403': { description: Apenas professores podem apropriar mapas }
+        '404': { description: Mapa não encontrado }
+        '409': { description: Mapa já pertence ao professor ou já foi apropriado }
+
+  /treinos/mapas/{id_mapa}/preview:
+    get:
+      tags: [Mapas e Treinos]
+      summary: Servir Preview do Mapa
+      description: Rota pública (sem autenticação) para exibir a imagem de preview de um mapa.
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: Imagem de preview
+          content:
+            image/png: {}
+            image/jpeg: {}
+        '404': { description: Preview não disponível }
+
+  /treinos/sessoes:
+    post:
+      tags: [Mapas e Treinos]
+      summary: Registar Sessão de Treino
+      description: Faz upload do arquivo de log de uma sessão e o vincula ao aluno e mapa.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [id_aluno, id_mapa, arquivo_log]
+              properties:
+                id_aluno:    { type: integer, example: 3 }
+                id_mapa:     { type: integer, example: 1 }
+                arquivo_log:
+                  type: string
+                  format: binary
+                  description: Arquivo de log gerado pelo app (.csv ou .json)
+      responses:
+        '201':
+          description: Sessão registada com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_log: { type: integer }
+        '403': { description: Aluno não pertence ao professor }
+        '404': { description: Aluno ou mapa não encontrado }
+
+    get:
+      tags: [Mapas e Treinos]
+      summary: Listar Sessões de um Aluno
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_aluno
+          in: query
+          required: true
+          schema: { type: integer, example: 3 }
+      responses:
+        '200':
+          description: Lista de sessões
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:   { type: integer }
+                  sessoes:
+                    type: array
+                    items: { $ref: '#/components/schemas/Sessao' }
+        '400': { description: Parâmetro id_aluno não informado }
+        '404': { description: Aluno não encontrado ou sem permissão }
+
+  /treinos/arquivos/{pasta}/{nome_arquivo}:
+    get:
+      tags: [Mapas e Treinos]
+      summary: Baixar Arquivo
+      description: Serve arquivos XML, JSON ou de log armazenados no servidor.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pasta
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [mapas, sessoes, analises]
+        - name: nome_arquivo
+          in: path
+          required: true
+          schema: { type: string, example: "1_casa_nivel1.xml" }
+      responses:
+        '200':
+          description: Conteúdo do arquivo
+          content:
+            application/xml: {}
+            application/json: {}
+        '403': { description: Pasta não permitida }
+        '404': { description: Arquivo não encontrado }
+
+  # ============================================================
+  # ATIVIDADES
+  # ============================================================
+  /atividades/:
+    post:
+      tags: [Atividades]
+      summary: Criar Atividade
+      description: Cria uma atividade com uma lista ordenada de mapas e alunos atribuídos.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nome, mapas]
+              properties:
+                nome:     { type: string,  example: "Treino Básico" }
+                descricao:{ type: string,  example: "Percurso inicial com dois mapas." }
+                mapas:
+                  type: array
+                  description: Ao menos um mapa é obrigatório
+                  items:
+                    type: object
+                    properties:
+                      id_mapa: { type: integer, example: 1 }
+                      ordem:   { type: integer, example: 1 }
+                alunos:
+                  type: array
+                  description: IDs dos alunos a quem a atividade será atribuída
+                  items: { type: integer, example: 3 }
+      responses:
+        '201':
+          description: Atividade criada com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_atividade: { type: integer }
+        '400': { description: Nome ou lista de mapas não informados }
+        '403': { description: Apenas professores podem criar atividades }
+
+    get:
+      tags: [Atividades]
+      summary: Listar Atividades
+      description: Retorna todas as atividades do professor autenticado.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de atividades
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:      { type: integer }
+                  atividades:
+                    type: array
+                    items: { $ref: '#/components/schemas/Atividade' }
+
+  /atividades/{id_atividade}:
+    get:
+      tags: [Atividades]
+      summary: Detalhar Atividade
+      description: Retorna os dados da atividade, incluindo mapas e alunos vinculados.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_atividade
+          in: path
+          required: true
+          schema: { type: integer, example: 2 }
+      responses:
+        '200':
+          description: Detalhe da atividade
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Atividade'
+                  - type: object
+                    properties:
+                      mapas:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id_mapa:   { type: integer }
+                            ordem:     { type: integer }
+                            nome_mapa: { type: string }
+                      alunos:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id_aluno:      { type: integer }
+                            nome_completo: { type: string }
+        '404': { description: Atividade não encontrada }
+
+  /atividades/{id_atividade}/ativo:
+    patch:
+      tags: [Atividades]
+      summary: Ativar / Desativar Atividade
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_atividade
+          in: path
+          required: true
+          schema: { type: integer, example: 2 }
+      responses:
+        '200':
+          description: Novo estado da atividade
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_atividade: { type: integer }
+                  ativo:        { type: boolean }
+        '404': { description: Atividade não encontrada }
+
+  /atividades/para-aluno/{id_aluno}:
+    get:
+      tags: [Atividades]
+      summary: Atividade Ativa do Aluno
+      description: >
+        Retorna a atividade ativa mais recente atribuída ao aluno, com os mapas
+        ordenados e seus caminhos de arquivo. Usado pelo app para carregar o treino.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_aluno
+          in: path
+          required: true
+          schema: { type: integer, example: 3 }
+      responses:
+        '200':
+          description: Atividade com mapas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_atividade: { type: integer }
+                  nome:         { type: string }
+                  descricao:    { type: string }
+                  mapas:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id_mapa:             { type: integer }
+                        ordem:               { type: integer }
+                        nome_mapa:           { type: string }
+                        caminho_arquivo_xml: { type: string }
+                        caminho_preview:     { type: string, nullable: true }
+        '404': { description: Nenhuma atividade ativa encontrada para o aluno }
+
+  # ============================================================
+  # ANÁLISES
+  # ============================================================
+  /analises/{tipo_analise}:
+    post:
+      tags: [Análises]
+      summary: Registar Análise
+      description: >
+        Salva o caminho do JSON de uma análise gerada para uma sessão de treino.
+        Tipos disponíveis: `lateralidade`, `simulacao_trajetoria`, `trafego`, `giros`, `comparacao`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: tipo_analise
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [lateralidade, simulacao_trajetoria, trafego, giros, comparacao]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_log, caminho_arquivo_json]
+              properties:
+                id_log:                { type: integer, example: 7 }
+                caminho_arquivo_json:  { type: string,  example: "/analises/aluno3_giros.json" }
+      responses:
+        '201': { description: Análise registada com sucesso }
+        '409': { description: Já existe este tipo de análise para esta sessão }
+
+  /analises/sessao/{id_log}:
+    get:
+      tags: [Análises]
+      summary: Ver Análises de uma Sessão
+      description: Retorna os caminhos de todos os tipos de análise gerados para a sessão.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_log
+          in: path
+          required: true
+          schema: { type: integer, example: 7 }
+      responses:
+        '200':
+          description: Caminhos das análises disponíveis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lateralidade:          { type: string, nullable: true }
+                  simulacao_trajetoria:  { type: string, nullable: true }
+                  trafego:               { type: string, nullable: true }
+                  giros:                 { type: string, nullable: true }
+                  comparacao:            { type: string, nullable: true }
