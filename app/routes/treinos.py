@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app, send_from_directory
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt, decode_token
 from datetime import datetime
-import os
+import os, json
 
 from app import db
 from app.models import Professor, Aluno, Mapa, LogSessao, TipoPessoa, Usuario
@@ -178,14 +178,59 @@ def listar_sessoes():
     lista = []
     for s in sessoes:
         mapa = Mapa.query.get(s.id_mapa)
+        dados = s.dados_log or {}
+        results = dados.get('results', {})
         lista.append({
-            "id_log": s.id_log,
-            "id_mapa": s.id_mapa,
-            "nome_mapa": mapa.nome_mapa if mapa else "—",
-            "data": s.data_criacao_arquivo_log.strftime("%Y-%m-%d %H:%M"),
+            "id_log":        s.id_log,
+            "id_mapa":       s.id_mapa,
+            "nome_mapa":     mapa.nome_mapa if mapa else "—",
+            "data":          s.data_criacao_arquivo_log.strftime("%Y-%m-%d %H:%M"),
+            "cleared_map":   results.get('clearedMap', False),
+            "tempo_sessao":  results.get('totalSessionTime'),
+            "tem_minimap":   bool(s.caminho_minimap),
         })
 
     return jsonify({"total": len(lista), "sessoes": lista}), 200
+
+
+# ==========================================
+# ROTA 2E: DETALHE DE UMA SESSÃO
+# ==========================================
+@treinos_bp.route('/sessoes/<int:id_log>', methods=['GET'])
+@jwt_required()
+def detalhe_sessao(id_log):
+    id_usuario_logado = get_jwt_identity()
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    s = LogSessao.query.filter_by(id_log=id_log, id_criador=professor.id_professor).first()
+    if not s:
+        return jsonify({"erro": "Sessão não encontrada ou sem permissão."}), 404
+
+    mapa   = Mapa.query.get(s.id_mapa)
+    dados  = s.dados_log or {}
+    results = dados.get('results', {})
+
+    objectives = dados.get('objectives', [])
+    total_acoes    = sum(len(o.get('actions', []))    for o in objectives)
+    total_colisoes = sum(len(o.get('collisions', [])) for o in objectives)
+
+    return jsonify({
+        "id_log":          s.id_log,
+        "id_mapa":         s.id_mapa,
+        "nome_mapa":       mapa.nome_mapa if mapa else "—",
+        "data":            s.data_criacao_arquivo_log.strftime("%Y-%m-%d %H:%M"),
+        "cleared_map":     results.get('clearedMap', False),
+        "tempo_sessao":    results.get('totalSessionTime'),
+        "total_acoes":     total_acoes,
+        "total_colisoes":  total_colisoes,
+        "total_objetivos": len(objectives),
+        "objetivos_concluidos": sum(1 for o in objectives if (o.get('endTime') or 0) > 0),
+        "caminho_minimap": s.caminho_minimap,
+        "tem_minimap":     bool(s.caminho_minimap),
+        "render_3d":       mapa.caminho_render_3d if mapa else None,
+    }), 200
 
 
 # ==========================================
@@ -224,14 +269,37 @@ def registar_sessao():
     if not mapa:
         return jsonify({"erro": "Mapa não encontrado."}), 404
 
+    id_atividade = request.form.get('id_atividade', type=int)
+
     try:
+        # Salva arquivo .json bruto
+        pasta_sessoes = os.path.join(current_app.config['UPLOAD_FOLDER'], 'sessoes')
+        os.makedirs(pasta_sessoes, exist_ok=True)
         caminho_relativo = salvar_arquivo_seguro(arquivo, 'sessoes', current_app.config['UPLOAD_FOLDER'])
+
+        # Parseia conteúdo do log para JSONB
+        arquivo.stream.seek(0)
+        try:
+            dados_log = json.load(arquivo.stream)
+        except Exception:
+            dados_log = None
+
+        # Minimap (opcional)
+        caminho_minimap = None
+        arquivo_minimap = request.files.get('minimap')
+        if arquivo_minimap and arquivo_minimap.filename:
+            pasta_minimaps = os.path.join(current_app.config['UPLOAD_FOLDER'], 'minimaps')
+            os.makedirs(pasta_minimaps, exist_ok=True)
+            caminho_minimap = salvar_arquivo_seguro(arquivo_minimap, 'minimaps', current_app.config['UPLOAD_FOLDER'])
 
         nova_sessao = LogSessao(
             id_aluno=aluno.id_aluno,
             id_criador=professor.id_professor,
             id_mapa=mapa.id_mapa,
-            caminho_arquivo_log=caminho_relativo
+            id_atividade=id_atividade,
+            caminho_arquivo_log=caminho_relativo,
+            dados_log=dados_log,
+            caminho_minimap=caminho_minimap
         )
         db.session.add(nova_sessao)
         db.session.commit()
@@ -245,12 +313,25 @@ def registar_sessao():
     
 # ==========================================
 # ROTA 4: SERVIR ARQUIVOS PARA O FRONTEND
-# Ex: GET /api/treinos/arquivos/mapas/1_2_entrada.xml
+# Aceita JWT via header Authorization OU query param ?token=
+# Ex: GET /api/treinos/arquivos/minimaps/aluno_14_...png?token=<jwt>
 # ==========================================
-@jwt_required()
 @treinos_bp.route('/arquivos/<pasta>/<nome_arquivo>', methods=['GET'])
 def baixar_arquivo(pasta, nome_arquivo):
-    if pasta not in ['mapas', 'sessoes', 'analises']:
+    # Autenticação: header Bearer ou query param token
+    from flask_jwt_extended import verify_jwt_in_request
+    try:
+        verify_jwt_in_request()
+    except Exception:
+        token_param = request.args.get('token')
+        if not token_param:
+            return jsonify({"erro": "Token não fornecido."}), 401
+        try:
+            decode_token(token_param)
+        except Exception:
+            return jsonify({"erro": "Token inválido."}), 401
+
+    if pasta not in ['mapas', 'sessoes', 'analises', 'minimaps', 'renders3d']:
         return jsonify({"erro": "Acesso negado à pasta solicitada."}), 403
 
     pasta_alvo = os.path.join(current_app.config['UPLOAD_FOLDER'], pasta)
@@ -416,8 +497,19 @@ def receber_render3d(id_mapa):
 # Ex: GET /api/treinos/mapas/<id>/render3d
 # ==========================================
 @treinos_bp.route('/mapas/<int:id_mapa>/render3d', methods=['GET'])
-@jwt_required()
 def servir_render3d(id_mapa):
+    from flask_jwt_extended import verify_jwt_in_request
+    try:
+        verify_jwt_in_request()
+    except Exception:
+        token_param = request.args.get('token')
+        if not token_param:
+            return jsonify({"erro": "Token não fornecido."}), 401
+        try:
+            decode_token(token_param)
+        except Exception:
+            return jsonify({"erro": "Token inválido."}), 401
+
     mapa = Mapa.query.get(id_mapa)
     if not mapa or not mapa.caminho_render_3d:
         return jsonify({"erro": "Render 3D não disponível."}), 404

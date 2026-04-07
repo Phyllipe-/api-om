@@ -1,5 +1,6 @@
 from app import db
 from datetime import datetime
+from sqlalchemy.dialects.postgresql import JSONB
 
 # -----------------------------------------
 # TABELAS DE AUTENTICAÇÃO E PERFIS
@@ -50,11 +51,14 @@ class Mapa(db.Model):
 
 class LogSessao(db.Model):
     __tablename__ = 'log_sessao'
-    id_log = db.Column(db.Integer, primary_key=True)
-    id_aluno = db.Column(db.Integer, db.ForeignKey('aluno.id_aluno'), nullable=False)
-    id_criador = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
-    id_mapa = db.Column(db.Integer, db.ForeignKey('mapa.id_mapa'), nullable=False)
-    caminho_arquivo_log = db.Column(db.String(500), nullable=False) # Rota onde o CSV/JSON de passos está guardado
+    id_log                  = db.Column(db.Integer, primary_key=True)
+    id_aluno                = db.Column(db.Integer, db.ForeignKey('aluno.id_aluno'), nullable=False)
+    id_criador              = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
+    id_mapa                 = db.Column(db.Integer, db.ForeignKey('mapa.id_mapa'), nullable=False)
+    id_atividade            = db.Column(db.Integer, db.ForeignKey('atividade.id_atividade'), nullable=True)
+    caminho_arquivo_log     = db.Column(db.String(500), nullable=False)  # arquivo .json bruto
+    dados_log               = db.Column(JSONB, nullable=True)            # conteúdo parseado do log
+    caminho_minimap         = db.Column(db.String(500), nullable=True)   # minimap PNG gerado ao finalizar
     data_criacao_arquivo_log = db.Column(db.DateTime, default=datetime.utcnow)
 
 # -----------------------------------------
