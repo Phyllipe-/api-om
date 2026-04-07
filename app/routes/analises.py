@@ -1,5 +1,6 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
+import json, os
 from app import db
 from app.models import Professor, TipoPessoa, LogSessao, Lateralidade, SimulacaoTrajetoria, Trafego, Giros, Comparacao
 
@@ -100,4 +101,66 @@ def buscar_analises_da_sessao(id_log):
     return jsonify({
         "id_log": id_log,
         "analises": resultados
+    }), 200
+
+
+# ==========================================
+# ROTA 3: MÉTRICAS CALCULADAS DE UMA SESSÃO
+# Ex: GET /api/analises/sessao/1/metricas
+# Retorna Precisão, Objetivos e Fluidez prontos para o radar chart.
+# ==========================================
+@analises_bp.route('/sessao/<int:id_log>/metricas', methods=['GET'])
+@jwt_required()
+def metricas_sessao(id_log):
+    id_usuario_logado = get_jwt_identity()
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+
+    sessao = LogSessao.query.filter_by(id_log=id_log).first()
+    if not sessao:
+        return jsonify({"erro": "Sessão não encontrada."}), 404
+    if professor and sessao.id_criador != professor.id_professor:
+        return jsonify({"erro": "Acesso negado."}), 403
+
+    def _ler_json(caminho_relativo):
+        if not caminho_relativo:
+            return None
+        caminho = os.path.join(current_app.config['UPLOAD_FOLDER'],
+                               caminho_relativo.lstrip('/'))
+        try:
+            with open(caminho, encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    lat  = Lateralidade.query.filter_by(id_log=id_log).first()
+    sim  = SimulacaoTrajetoria.query.filter_by(id_log=id_log).first()
+    log_json = _ler_json(LogSessao.query.get(id_log).caminho_arquivo_log if sessao else None)
+
+    # Precisão — vem do JSON de lateralidade (campo precisao_pct) ou do log direto
+    lat_json = _ler_json(lat.caminho_arquivo_json if lat else None)
+    sim_json = _ler_json(sim.caminho_arquivo_json if sim else None)
+    log_data = _ler_json(sessao.caminho_arquivo_log)
+
+    if log_data:
+        precisao  = log_data.get("precisao_pct")
+        objetivos = log_data.get("objetivos_pct")
+        fluidez   = log_data.get("fluidez_pct")
+    else:
+        # Fallback: extrai dos JSONs de análise individuais
+        precisao  = (lat_json or {}).get("precisao_pct")
+        fluidez   = (sim_json or {}).get("fluidez_pct")
+        objetivos = None
+
+    if precisao is None and objetivos is None and fluidez is None:
+        return jsonify({"erro": "Dados de análise insuficientes para calcular métricas."}), 404
+
+    return jsonify({
+        "id_log": id_log,
+        "metricas": {
+            "precisao":  precisao,   # 0–100 — baseada em colisões
+            "objetivos": objetivos,  # 0–100 — metas alcançadas / total
+            "fluidez":   fluidez,    # 0–100 — distância ótima / percorrida
+        },
+        "atividade_finalizada": (log_data or {}).get("atividade_finalizada"),
+        "nome_mapa": sessao.id_mapa,  # retorna id; join de nome feito no frontend via sessoes
     }), 200

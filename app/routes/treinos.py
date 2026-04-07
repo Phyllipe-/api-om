@@ -310,7 +310,54 @@ def apropriar_mapa(id_mapa):
 
 
 # ==========================================
-# ROTA 6: SERVIR PREVIEW DE MAPA (sem autenticação — imagens públicas)
+# ROTA 6: ATUALIZAR PREVIEW DE MAPA (screenshot 3D capturado pelo ENA)
+# Ex: PATCH /api/treinos/mapas/<id>/preview
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/preview', methods=['PATCH'])
+@jwt_required()
+def atualizar_preview(id_mapa):
+    id_usuario_logado = get_jwt_identity()
+    claims = get_jwt()
+
+    if claims.get('id_tipo') != 1:
+        return jsonify({"erro": "Apenas professores podem atualizar previews."}), 403
+
+    mapa = Mapa.query.get(id_mapa)
+    if not mapa:
+        return jsonify({"erro": "Mapa não encontrado."}), 404
+
+    arquivo_preview = request.files.get('arquivo_preview')
+    if not arquivo_preview or not arquivo_preview.filename:
+        return jsonify({"erro": "Nenhum arquivo de preview enviado."}), 400
+
+    if not arquivo_permitido(arquivo_preview.filename, EXTENSOES_PREVIEW):
+        return jsonify({"erro": "Formato inválido. Use PNG, JPG ou WEBP."}), 400
+
+    try:
+        pasta_previews = os.path.join(current_app.config['UPLOAD_FOLDER'], 'previews')
+        os.makedirs(pasta_previews, exist_ok=True)
+
+        # Remove preview anterior se existir
+        if mapa.caminho_preview:
+            caminho_antigo = os.path.join(current_app.config['UPLOAD_FOLDER'],
+                                          mapa.caminho_preview.lstrip('/'))
+            if os.path.exists(caminho_antigo):
+                os.remove(caminho_antigo)
+
+        novo_caminho = salvar_arquivo_seguro(arquivo_preview, 'previews',
+                                             current_app.config['UPLOAD_FOLDER'])
+        mapa.caminho_preview = novo_caminho
+        db.session.commit()
+
+        return jsonify({"mensagem": "Preview atualizado com sucesso.", "caminho_preview": novo_caminho}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": f"Erro ao salvar preview: {str(e)}"}), 500
+
+
+# ==========================================
+# ROTA 7: SERVIR PREVIEW DE MAPA (sem autenticação — imagens públicas)
 # Ex: GET /api/treinos/mapas/<id>/preview
 # ==========================================
 @treinos_bp.route('/mapas/<int:id_mapa>/preview', methods=['GET'])
@@ -322,4 +369,59 @@ def servir_preview(id_mapa):
     # caminho_preview é "/previews/nome.png"
     nome_arquivo = os.path.basename(mapa.caminho_preview)
     pasta_alvo = os.path.join(current_app.config['UPLOAD_FOLDER'], 'previews')
+    return send_from_directory(pasta_alvo, nome_arquivo)
+
+
+# ==========================================
+# ROTA 8: RECEBER RENDER 3D DO ENA
+# Ex: POST /api/treinos/mapas/<id>/render3d
+# Chamado pelo ENA na primeira vez que o jogador entra no mapa.
+# Salva em uploads/renders3d/ e registra em mapa.caminho_render_3d.
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/render3d', methods=['POST'])
+@jwt_required()
+def receber_render3d(id_mapa):
+    mapa = Mapa.query.get(id_mapa)
+    if not mapa:
+        return jsonify({"erro": "Mapa não encontrado."}), 404
+
+    arquivo = request.files.get('render3d')
+    if not arquivo or not arquivo.filename:
+        return jsonify({"erro": "Nenhum arquivo enviado. Use o campo 'render3d'."}), 400
+
+    if not arquivo_permitido(arquivo.filename, EXTENSOES_PREVIEW):
+        return jsonify({"erro": "Formato inválido. Use PNG, JPG ou WEBP."}), 400
+
+    try:
+        pasta = os.path.join(current_app.config['UPLOAD_FOLDER'], 'renders3d')
+        os.makedirs(pasta, exist_ok=True)
+
+        caminho = salvar_arquivo_seguro(arquivo, 'renders3d', current_app.config['UPLOAD_FOLDER'])
+        mapa.caminho_render_3d = caminho
+        db.session.commit()
+
+        return jsonify({
+            "mensagem": "Render 3D recebido com sucesso.",
+            "id_mapa": id_mapa,
+            "caminho_render_3d": caminho
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": f"Erro ao salvar render: {str(e)}"}), 500
+
+
+# ==========================================
+# ROTA 9: SERVIR RENDER 3D
+# Ex: GET /api/treinos/mapas/<id>/render3d
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/render3d', methods=['GET'])
+@jwt_required()
+def servir_render3d(id_mapa):
+    mapa = Mapa.query.get(id_mapa)
+    if not mapa or not mapa.caminho_render_3d:
+        return jsonify({"erro": "Render 3D não disponível."}), 404
+
+    nome_arquivo = os.path.basename(mapa.caminho_render_3d)
+    pasta_alvo = os.path.join(current_app.config['UPLOAD_FOLDER'], 'renders3d')
     return send_from_directory(pasta_alvo, nome_arquivo)

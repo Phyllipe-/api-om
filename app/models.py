@@ -43,7 +43,8 @@ class Mapa(db.Model):
     nome_mapa = db.Column(db.String(150), nullable=False)
     id_criador = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
     caminho_arquivo_xml = db.Column(db.String(500), nullable=False) # URL ou path do arquivo XML
-    caminho_preview     = db.Column(db.String(500), nullable=True)  # thumbnail PNG
+    caminho_preview     = db.Column(db.String(500), nullable=True)  # thumbnail PNG (2D, gerado pelo editor)
+    caminho_render_3d   = db.Column(db.String(500), nullable=True)  # captura 3D gerada pelo ENA em runtime
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
     ativo = db.Column(db.Boolean, default=True, nullable=False, server_default='true')
 
