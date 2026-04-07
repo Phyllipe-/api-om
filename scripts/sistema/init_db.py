@@ -4,7 +4,7 @@ from datetime import datetime
 from werkzeug.security import generate_password_hash
 
 # Adiciona a pasta raiz ao caminho para o Python encontrar a pasta 'app'
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from app import create_app, db
 from app import models
