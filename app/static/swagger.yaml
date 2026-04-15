@@ -705,8 +705,8 @@ paths:
               type: object
               required: [nome, mapas]
               properties:
-                nome:     { type: string,  example: "Treino Básico" }
-                descricao:{ type: string,  example: "Percurso inicial com dois mapas." }
+                nome:      { type: string, example: "Treino Básico" }
+                descricao: { type: string, example: "Percurso inicial com dois mapas." }
                 mapas:
                   type: array
                   description: Ao menos um mapa é obrigatório

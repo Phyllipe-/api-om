@@ -220,6 +220,7 @@ def detalhe_sessao(id_log):
         "id_log":          s.id_log,
         "id_mapa":         s.id_mapa,
         "nome_mapa":       mapa.nome_mapa if mapa else "—",
+        "nome_arquivo_xml": mapa.caminho_arquivo_xml if mapa else None,
         "data":            s.data_criacao_arquivo_log.strftime("%Y-%m-%d %H:%M"),
         "cleared_map":     results.get('clearedMap', False),
         "tempo_sessao":    results.get('totalSessionTime'),
@@ -230,6 +231,7 @@ def detalhe_sessao(id_log):
         "caminho_minimap": s.caminho_minimap,
         "tem_minimap":     bool(s.caminho_minimap),
         "render_3d":       mapa.caminho_render_3d if mapa else None,
+        "dados_log":       dados,
     }), 200
 
 
