@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager
@@ -16,6 +17,7 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://om_user:vision@localhost:5432/om_database'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['JWT_SECRET_KEY'] = 'chave-secreta-super-segura-om-2026'
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=4)
 
     # Liga as extensões à app
     db.init_app(app)

@@ -23,9 +23,15 @@ class Usuario(db.Model):
 
 class Professor(db.Model):
     __tablename__ = 'professor'
-    id_professor = db.Column(db.Integer, primary_key=True)
-    id_usuario = db.Column(db.Integer, db.ForeignKey('usuario.id_usuario'), unique=True, nullable=False)
-    registro_profissional = db.Column(db.String(50), nullable=True)
+    id_professor          = db.Column(db.Integer, primary_key=True)
+    id_usuario            = db.Column(db.Integer, db.ForeignKey('usuario.id_usuario'), unique=True, nullable=False)
+    registro_profissional = db.Column(db.String(50),  nullable=True)   # legado — mantido por compatibilidade
+    formacao_academica    = db.Column(db.Text,         nullable=True)
+    telefone              = db.Column(db.String(20),   nullable=True)
+    tipo_endereco         = db.Column(db.String(20),   nullable=True)   # 'pessoal' | 'profissional'
+    nome_instituicao      = db.Column(db.String(200),  nullable=True)
+    cep                   = db.Column(db.String(9),    nullable=True)
+    logradouro            = db.Column(db.String(300),  nullable=True)
 
 class Aluno(db.Model):
     __tablename__ = 'aluno'
@@ -34,6 +40,9 @@ class Aluno(db.Model):
     id_professor_responsavel = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
     escolaridade = db.Column(db.String(100), nullable=True)
     login = db.Column(db.String(80), unique=True, nullable=True)  # identificador curto; padrão = parte antes do '@'
+    telefone   = db.Column(db.String(20),  nullable=True)
+    cep        = db.Column(db.String(9),   nullable=True)
+    logradouro = db.Column(db.String(300), nullable=True)
 
 # -----------------------------------------
 # TABELAS DE OPERAÇÃO E LOGS (REFERÊNCIAS)

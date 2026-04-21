@@ -24,7 +24,11 @@ def _aluno_dict(aluno, usr):
         "email": usr.email,
         "login": _login_efetivo(aluno, usr),
         "idade": idade,
+        "data_nascimento": usr.data_nascimento.strftime('%Y-%m-%d') if usr.data_nascimento else None,
         "escolaridade": aluno.escolaridade,
+        "telefone":   aluno.telefone,
+        "cep":        aluno.cep,
+        "logradouro": aluno.logradouro,
         "ativo": usr.ativo
     }
 
@@ -76,7 +80,10 @@ def cadastrar_aluno():
             id_usuario=novo_usuario.id_usuario,
             id_professor_responsavel=professor.id_professor,
             escolaridade=dados.get('escolaridade', ''),
-            login=login
+            login=login,
+            telefone=dados.get('telefone') or None,
+            cep=dados.get('cep') or None,
+            logradouro=dados.get('logradouro') or None,
         )
         db.session.add(novo_aluno)
         db.session.commit()
@@ -179,6 +186,117 @@ def buscar_aluno():
 
 
 # ==========================================
+# ROTA 5b: BUSCA GLOBAL DE ALUNOS (todos os professores)
+# Admin vê todos; professor vê apenas os seus.
+# ==========================================
+@alunos_bp.route('/buscar-todos', methods=['GET'])
+@jwt_required()
+def buscar_todos():
+    id_usuario_logado = int(get_jwt_identity())
+    q = request.args.get('q', '').strip().lower()
+
+    # Determina o professor atual (para calcular is_meu)
+    professor_atual = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+    id_prof_atual = professor_atual.id_professor if professor_atual else None
+
+    # Com busca: todos os alunos do sistema; sem busca: só os próprios (admin vê todos)
+    if q or id_usuario_logado == 1:
+        alunos = Aluno.query.all()
+    else:
+        if not professor_atual:
+            return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+        alunos = Aluno.query.filter_by(id_professor_responsavel=id_prof_atual).all()
+
+    resultado = []
+    for aluno in alunos:
+        usr = Usuario.query.get(aluno.id_usuario)
+        if not usr:
+            continue
+        # Filtra por nome, login ou email (se q fornecido)
+        if q:
+            campos = [
+                usr.nome_completo.lower(),
+                (aluno.login or "").lower(),
+                usr.email.lower(),
+            ]
+            if not any(q in c for c in campos):
+                continue
+
+        prof = Professor.query.get(aluno.id_professor_responsavel)
+        prof_usr = Usuario.query.get(prof.id_usuario) if prof else None
+
+        hoje = datetime.now().date()
+        idade = hoje.year - usr.data_nascimento.year - (
+            (hoje.month, hoje.day) < (usr.data_nascimento.month, usr.data_nascimento.day)
+        ) if usr.data_nascimento else None
+
+        resultado.append({
+            "id_aluno":      aluno.id_aluno,
+            "nome_completo": usr.nome_completo,
+            "email":         usr.email,
+            "login":         aluno.login or usr.email.split('@')[0],
+            "escolaridade":  aluno.escolaridade,
+            "ativo":         usr.ativo,
+            "idade":         idade,
+            "professor":     prof_usr.nome_completo if prof_usr else "—",
+            "id_professor":  aluno.id_professor_responsavel,
+            "is_meu":        aluno.id_professor_responsavel == id_prof_atual,
+        })
+
+    resultado.sort(key=lambda x: x["nome_completo"].lower())
+    return jsonify({"total": len(resultado), "alunos": resultado}), 200
+
+
+# ==========================================
+# ROTA 5c: APROPRIAR ALUNO (transferir para o professor logado)
+# Só permitido para alunos inativos de outro professor.
+# ==========================================
+@alunos_bp.route('/<int:id_aluno>/apropriar', methods=['POST'])
+@jwt_required()
+def apropriar_aluno(id_aluno):
+    id_usuario_logado = int(get_jwt_identity())
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    aluno = Aluno.query.get(id_aluno)
+    if not aluno:
+        return jsonify({"erro": "Aluno não encontrado."}), 404
+
+    usr = Usuario.query.get(aluno.id_usuario)
+    if not usr:
+        return jsonify({"erro": "Usuário do aluno não encontrado."}), 404
+
+    if usr.ativo:
+        return jsonify({"erro": "Apenas alunos inativos podem ser apropriados."}), 400
+
+    if aluno.id_professor_responsavel == professor.id_professor:
+        return jsonify({"erro": "Este aluno já pertence a você."}), 400
+
+    aluno.id_professor_responsavel = professor.id_professor
+    db.session.commit()
+    return jsonify({"id_aluno": id_aluno, "id_professor": professor.id_professor}), 200
+
+
+# ==========================================
+# ROTA 5d: VERIFICAR DISPONIBILIDADE DE LOGIN
+# ==========================================
+@alunos_bp.route('/check-login', methods=['GET'])
+@jwt_required()
+def check_login():
+    login = request.args.get('login', '').strip()
+    exclude_id = request.args.get('exclude_id', type=int)
+    if not login:
+        return jsonify({"erro": "Parâmetro 'login' é obrigatório."}), 400
+
+    q = Aluno.query.filter(Aluno.login == login)
+    if exclude_id:
+        q = q.filter(Aluno.id_aluno != exclude_id)
+    disponivel = q.first() is None
+    return jsonify({"disponivel": disponivel}), 200
+
+
+# ==========================================
 # ROTA 6: EDITAR DADOS DO ALUNO
 # ==========================================
 @alunos_bp.route('/<int:id_aluno>', methods=['PATCH'])
@@ -213,6 +331,13 @@ def editar_aluno(id_aluno):
 
     if 'escolaridade' in dados:
         aluno.escolaridade = dados['escolaridade']
+
+    if 'telefone' in dados:
+        aluno.telefone = dados['telefone'] or None
+    if 'cep' in dados:
+        aluno.cep = dados['cep'] or None
+    if 'logradouro' in dados:
+        aluno.logradouro = dados['logradouro'] or None
 
     if 'nova_senha' in dados and dados['nova_senha']:
         from werkzeug.security import generate_password_hash
