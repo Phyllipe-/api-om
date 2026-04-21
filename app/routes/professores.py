@@ -4,7 +4,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
 
 from app import db
-from app.models import Usuario, Professor
+from app.models import Usuario, Professor, Aluno, Mapa, LogSessao, Atividade
 
 professores_bp = Blueprint('professores', __name__)
 
@@ -134,3 +134,48 @@ def toggle_ativo_professor(id_professor):
     usr.ativo = not usr.ativo
     db.session.commit()
     return jsonify({"id_professor": id_professor, "ativo": usr.ativo}), 200
+
+
+# ==========================================
+# ROTA 5: REMOVER PROFESSOR
+# ==========================================
+@professores_bp.route('/<int:id_professor>', methods=['DELETE'])
+@jwt_required()
+def remover_professor(id_professor):
+    _, err = _require_admin()
+    if err:
+        return err
+
+    prof = Professor.query.get(id_professor)
+    if not prof:
+        return jsonify({"erro": "Professor não encontrado."}), 404
+
+    usr = Usuario.query.get(prof.id_usuario)
+    if usr.id_usuario == 1:
+        return jsonify({"erro": "Não é possível remover o administrador."}), 400
+
+    # Bloqueia se existirem dependências
+    tem_alunos    = Aluno.query.filter_by(id_professor_responsavel=prof.id_professor).first()
+    tem_mapas     = Mapa.query.filter_by(id_criador=prof.id_professor).first()
+    tem_atividades = Atividade.query.filter_by(id_professor=prof.id_professor).first()
+    tem_sessoes   = LogSessao.query.filter_by(id_criador=prof.id_professor).first()
+
+    pendencias = []
+    if tem_alunos:     pendencias.append("alunos vinculados")
+    if tem_mapas:      pendencias.append("mapas criados")
+    if tem_atividades: pendencias.append("atividades criadas")
+    if tem_sessoes:    pendencias.append("sessões registradas")
+
+    if pendencias:
+        return jsonify({
+            "erro": f"Não é possível remover este professor pois ele possui {', '.join(pendencias)}."
+        }), 409
+
+    try:
+        db.session.delete(prof)
+        db.session.delete(usr)
+        db.session.commit()
+        return jsonify({"mensagem": "Professor removido com sucesso."}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": f"Falha ao remover: {str(e)}"}), 500
