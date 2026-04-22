@@ -1,9 +1,20 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from datetime import datetime
+from datetime import datetime, date
 
 from app import db
-from app.models import Professor, Aluno, Mapa, Atividade, AtividadeMapa, AtividadeAluno, Usuario, TipoPessoa
+from app.models import Professor, Aluno, Mapa, Atividade, AtividadeMapa, AtividadeAluno, Usuario, TipoPessoa, LogSessao
+
+
+def _calcular_periodos(data_ref):
+    """Retorna bimestre, trimestre e semestre no formato 'YYYY.N' para uma data."""
+    ano = data_ref.year
+    mes = data_ref.month
+    return {
+        "bimestre":  f"{ano}.{(mes - 1) // 2 + 1}",
+        "trimestre": f"{ano}.{(mes - 1) // 3 + 1}",
+        "semestre":  f"{ano}.{1 if mes <= 6 else 2}",
+    }
 
 atividades_bp = Blueprint('atividades', __name__)
 
@@ -17,15 +28,33 @@ def _professor_from_request():
 def _serializar_atividade(at, incluir_detalhes=False):
     prof = Professor.query.get(at.id_professor)
     usr  = Usuario.query.get(prof.id_usuario) if prof else None
+
+    # ── Cálculos de período ──────────────────────────────────────────
+    data_inicio = at.data_criacao.date() if at.data_criacao else date.today()
+    data_fim    = at.data_finalizacao.date() if at.data_finalizacao else (date.today() if not at.ativo else None)
+    dias_duracao = (data_fim - data_inicio).days if data_fim else None
+
+    periodos_inicio = _calcular_periodos(data_inicio)
+    periodos_fim    = _calcular_periodos(data_fim) if data_fim else None
+
     dados = {
         "id_atividade": at.id_atividade,
         "nome":         at.nome,
         "descricao":    at.descricao,
         "ativo":        at.ativo,
-        "data_criacao": at.data_criacao.strftime("%Y-%m-%d %H:%M"),
+        "data_criacao": at.data_criacao.strftime("%Y-%m-%d %H:%M") if at.data_criacao else None,
         "nome_professor": usr.nome_completo if usr else "—",
         "total_mapas":  AtividadeMapa.query.filter_by(id_atividade=at.id_atividade).count(),
         "total_alunos": AtividadeAluno.query.filter_by(id_atividade=at.id_atividade).count(),
+        # Período
+        "data_previsao_finalizacao": at.data_previsao_finalizacao.strftime("%Y-%m-%d") if at.data_previsao_finalizacao else None,
+        "data_finalizacao":          at.data_finalizacao.strftime("%Y-%m-%d %H:%M")    if at.data_finalizacao          else None,
+        "dias_duracao": dias_duracao,
+        "periodo_inicio": periodos_inicio,
+        "periodo_fim":    periodos_fim,
+        # Estado
+        "finalizada": at.data_finalizacao is not None,
+        "tem_logs":   LogSessao.query.filter_by(id_atividade=at.id_atividade).count() > 0,
     }
     if incluir_detalhes:
         mapas = (
@@ -73,11 +102,20 @@ def criar_atividade():
     if not mapas_payload:
         return jsonify({"erro": "A atividade deve ter ao menos um mapa."}), 400
 
+    # Converte data_previsao_finalizacao se enviada
+    data_previsao = None
+    if dados.get('data_previsao_finalizacao'):
+        try:
+            data_previsao = datetime.strptime(dados['data_previsao_finalizacao'], "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"erro": "Formato de data inválido. Use YYYY-MM-DD."}), 400
+
     try:
         nova = Atividade(
             nome=dados['nome'],
             descricao=dados.get('descricao', ''),
-            id_professor=professor.id_professor
+            id_professor=professor.id_professor,
+            data_previsao_finalizacao=data_previsao,
         )
         db.session.add(nova)
         db.session.flush()
@@ -151,7 +189,67 @@ def detalhar_atividade(id_atividade):
 
 
 # ==========================================
-# ROTA 4: ATIVAR / DESATIVAR ATIVIDADE
+# ROTA 4: EDITAR ATIVIDADE (somente sem alunos)
+# ==========================================
+@atividades_bp.route('/<int:id_atividade>', methods=['PATCH'])
+@jwt_required()
+def editar_atividade(id_atividade):
+    professor = _professor_from_request()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    at = Atividade.query.filter_by(
+        id_atividade=id_atividade,
+        id_professor=professor.id_professor
+    ).first()
+    if not at:
+        return jsonify({"erro": "Atividade não encontrada."}), 404
+
+    dados = request.get_json() or {}
+
+    if dados.get('nome'):
+        at.nome = dados['nome']
+    if 'descricao' in dados:
+        at.descricao = dados.get('descricao') or ''
+    if 'data_previsao_finalizacao' in dados:
+        if dados['data_previsao_finalizacao']:
+            try:
+                at.data_previsao_finalizacao = datetime.strptime(dados['data_previsao_finalizacao'], "%Y-%m-%d").date()
+            except ValueError:
+                return jsonify({"erro": "Formato de data inválido. Use YYYY-MM-DD."}), 400
+        else:
+            at.data_previsao_finalizacao = None
+
+    if 'mapas' in dados:
+        if not dados['mapas']:
+            return jsonify({"erro": "A atividade deve ter ao menos um mapa."}), 400
+        AtividadeMapa.query.filter_by(id_atividade=id_atividade).delete()
+        for item in dados['mapas']:
+            db.session.add(AtividadeMapa(
+                id_atividade=id_atividade,
+                id_mapa=item['id_mapa'],
+                ordem=item['ordem'],
+            ))
+
+    if 'alunos' in dados:
+        AtividadeAluno.query.filter_by(id_atividade=id_atividade).delete()
+        for id_aluno in dados['alunos']:
+            aluno = Aluno.query.filter_by(
+                id_aluno=id_aluno,
+                id_professor_responsavel=professor.id_professor
+            ).first()
+            if aluno:
+                db.session.add(AtividadeAluno(
+                    id_atividade=id_atividade,
+                    id_aluno=id_aluno,
+                ))
+
+    db.session.commit()
+    return jsonify({"mensagem": "Atividade atualizada.", "id_atividade": id_atividade}), 200
+
+
+# ==========================================
+# ROTA 5: ATIVAR / DESATIVAR ATIVIDADE
 # ==========================================
 @atividades_bp.route('/<int:id_atividade>/ativo', methods=['PATCH'])
 @jwt_required()
@@ -167,13 +265,103 @@ def toggle_ativo(id_atividade):
     if not at:
         return jsonify({"erro": "Atividade não encontrada."}), 404
 
+    # Bloqueia reativação de atividade finalizada
+    if not at.ativo and at.data_finalizacao is not None:
+        return jsonify({"erro": "Atividade finalizada não pode ser reativada. Use 'Copiar' para criar uma nova."}), 409
+
+    # Bloqueia desativação se houver logs
+    if at.ativo:
+        tem_logs = LogSessao.query.filter_by(id_atividade=at.id_atividade).count() > 0
+        if tem_logs:
+            return jsonify({"erro": "Esta atividade possui dados de alunos. Use 'Finalizar' para encerrá-la."}), 409
+
     at.ativo = not at.ativo
     db.session.commit()
     return jsonify({"id_atividade": id_atividade, "ativo": at.ativo}), 200
 
 
 # ==========================================
-# ROTA 5: ATIVIDADE ATIVA DE UM ALUNO
+# ROTA 5: FINALIZAR ATIVIDADE
+# ==========================================
+@atividades_bp.route('/<int:id_atividade>/finalizar', methods=['POST'])
+@jwt_required()
+def finalizar_atividade(id_atividade):
+    professor = _professor_from_request()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    at = Atividade.query.filter_by(
+        id_atividade=id_atividade,
+        id_professor=professor.id_professor
+    ).first()
+    if not at:
+        return jsonify({"erro": "Atividade não encontrada."}), 404
+    if not at.ativo:
+        return jsonify({"erro": "A atividade já está inativa."}), 409
+    if at.data_finalizacao is not None:
+        return jsonify({"erro": "A atividade já foi finalizada."}), 409
+
+    at.ativo = False
+    at.data_finalizacao = datetime.utcnow()
+    db.session.commit()
+    return jsonify({
+        "id_atividade": at.id_atividade,
+        "ativo": False,
+        "data_finalizacao": at.data_finalizacao.strftime("%Y-%m-%d %H:%M"),
+    }), 200
+
+
+# ==========================================
+# ROTA 6: COPIAR ATIVIDADE (sem alunos)
+# ==========================================
+@atividades_bp.route('/<int:id_atividade>/copia', methods=['POST'])
+@jwt_required()
+def copiar_atividade(id_atividade):
+    professor = _professor_from_request()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    at = Atividade.query.get(id_atividade)
+    if not at:
+        return jsonify({"erro": "Atividade não encontrada."}), 404
+
+    try:
+        nova = Atividade(
+            nome=f"{at.nome} (cópia)",
+            descricao=at.descricao,
+            id_professor=professor.id_professor,
+            data_previsao_finalizacao=at.data_previsao_finalizacao,
+        )
+        db.session.add(nova)
+        db.session.flush()
+
+        mapas = (
+            AtividadeMapa.query
+            .filter_by(id_atividade=at.id_atividade)
+            .order_by(AtividadeMapa.ordem)
+            .all()
+        )
+        for am in mapas:
+            db.session.add(AtividadeMapa(
+                id_atividade=nova.id_atividade,
+                id_mapa=am.id_mapa,
+                ordem=am.ordem,
+            ))
+
+        db.session.commit()
+        return jsonify({
+            "mensagem": "Atividade copiada com sucesso.",
+            "id_atividade": nova.id_atividade,
+            "nome": nova.nome,
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": f"Erro ao copiar atividade: {str(e)}"}), 500
+
+
+# ==========================================
+# ROTA 7: ATIVIDADE ATIVA DE UM ALUNO
 # ==========================================
 @atividades_bp.route('/para-aluno/<int:id_aluno>', methods=['GET'])
 @jwt_required()
