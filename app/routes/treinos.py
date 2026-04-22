@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app, send_from_directory
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt, decode_token
 from datetime import datetime
-import os
+import os, json
 
 from app import db
 from app.models import Professor, Aluno, Mapa, LogSessao, TipoPessoa, Usuario
@@ -84,6 +84,9 @@ def listar_mapas():
     for mapa in mapas:
         prof = Professor.query.get(mapa.id_criador)
         usr = Usuario.query.get(prof.id_usuario) if prof else None
+        original = Mapa.query.get(mapa.id_mapa_original) if mapa.id_mapa_original else None
+        prof_original = Professor.query.get(original.id_criador) if original else None
+        usr_original  = Usuario.query.get(prof_original.id_usuario) if prof_original else None
         lista_mapas.append({
             "id_mapa": mapa.id_mapa,
             "nome_mapa": mapa.nome_mapa,
@@ -92,7 +95,10 @@ def listar_mapas():
             "data_criacao": mapa.data_criacao.strftime("%Y-%m-%d %H:%M"),
             "ativo": mapa.ativo,
             "id_criador": mapa.id_criador,
-            "nome_professor": usr.nome_completo if usr else "—"
+            "nome_professor": usr.nome_completo if usr else "—",
+            "id_mapa_original":        mapa.id_mapa_original,
+            "nome_mapa_original":      original.nome_mapa          if original     else None,
+            "nome_professor_original": usr_original.nome_completo  if usr_original else None,
         })
 
     return jsonify({"total": len(lista_mapas), "mapas": lista_mapas}), 200
@@ -113,13 +119,19 @@ def listar_meus_mapas():
     lista_mapas = []
 
     for mapa in mapas:
+        original = Mapa.query.get(mapa.id_mapa_original) if mapa.id_mapa_original else None
+        prof_original = Professor.query.get(original.id_criador) if original else None
+        usr_original  = Usuario.query.get(prof_original.id_usuario) if prof_original else None
         lista_mapas.append({
             "id_mapa": mapa.id_mapa,
             "nome_mapa": mapa.nome_mapa,
             "caminho_arquivo_xml": mapa.caminho_arquivo_xml,
             "caminho_preview": mapa.caminho_preview,
             "data_criacao": mapa.data_criacao.strftime("%Y-%m-%d %H:%M"),
-            "ativo": mapa.ativo
+            "ativo": mapa.ativo,
+            "id_mapa_original":        mapa.id_mapa_original,
+            "nome_mapa_original":      original.nome_mapa          if original     else None,
+            "nome_professor_original": usr_original.nome_completo  if usr_original else None,
         })
 
     return jsonify({"total": len(lista_mapas), "mapas": lista_mapas}), 200
@@ -178,14 +190,61 @@ def listar_sessoes():
     lista = []
     for s in sessoes:
         mapa = Mapa.query.get(s.id_mapa)
+        dados = s.dados_log or {}
+        results = dados.get('results', {})
         lista.append({
-            "id_log": s.id_log,
-            "id_mapa": s.id_mapa,
-            "nome_mapa": mapa.nome_mapa if mapa else "—",
-            "data": s.data_criacao_arquivo_log.strftime("%Y-%m-%d %H:%M"),
+            "id_log":        s.id_log,
+            "id_mapa":       s.id_mapa,
+            "nome_mapa":     mapa.nome_mapa if mapa else "—",
+            "data":          s.data_criacao_arquivo_log.strftime("%Y-%m-%d %H:%M"),
+            "cleared_map":   results.get('clearedMap', False),
+            "tempo_sessao":  results.get('totalSessionTime'),
+            "tem_minimap":   bool(s.caminho_minimap),
         })
 
     return jsonify({"total": len(lista), "sessoes": lista}), 200
+
+
+# ==========================================
+# ROTA 2E: DETALHE DE UMA SESSÃO
+# ==========================================
+@treinos_bp.route('/sessoes/<int:id_log>', methods=['GET'])
+@jwt_required()
+def detalhe_sessao(id_log):
+    id_usuario_logado = get_jwt_identity()
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    s = LogSessao.query.filter_by(id_log=id_log, id_criador=professor.id_professor).first()
+    if not s:
+        return jsonify({"erro": "Sessão não encontrada ou sem permissão."}), 404
+
+    mapa   = Mapa.query.get(s.id_mapa)
+    dados  = s.dados_log or {}
+    results = dados.get('results', {})
+
+    objectives = dados.get('objectives', [])
+    total_acoes    = sum(len(o.get('actions', []))    for o in objectives)
+    total_colisoes = sum(len(o.get('collisions', [])) for o in objectives)
+
+    return jsonify({
+        "id_log":          s.id_log,
+        "id_mapa":         s.id_mapa,
+        "nome_mapa":       mapa.nome_mapa if mapa else "—",
+        "nome_arquivo_xml": mapa.caminho_arquivo_xml if mapa else None,
+        "data":            s.data_criacao_arquivo_log.strftime("%Y-%m-%d %H:%M"),
+        "cleared_map":     results.get('clearedMap', False),
+        "tempo_sessao":    results.get('totalSessionTime'),
+        "total_acoes":     total_acoes,
+        "total_colisoes":  total_colisoes,
+        "total_objetivos": len(objectives),
+        "objetivos_concluidos": sum(1 for o in objectives if (o.get('startTime') or 0) > 0),
+        "caminho_minimap": s.caminho_minimap,
+        "tem_minimap":     bool(s.caminho_minimap),
+        "render_3d":       mapa.caminho_render_3d if mapa else None,
+        "dados_log":       dados,
+    }), 200
 
 
 # ==========================================
@@ -224,14 +283,37 @@ def registar_sessao():
     if not mapa:
         return jsonify({"erro": "Mapa não encontrado."}), 404
 
+    id_atividade = request.form.get('id_atividade', type=int)
+
     try:
+        # Salva arquivo .json bruto
+        pasta_sessoes = os.path.join(current_app.config['UPLOAD_FOLDER'], 'sessoes')
+        os.makedirs(pasta_sessoes, exist_ok=True)
         caminho_relativo = salvar_arquivo_seguro(arquivo, 'sessoes', current_app.config['UPLOAD_FOLDER'])
+
+        # Parseia conteúdo do log para JSONB
+        arquivo.stream.seek(0)
+        try:
+            dados_log = json.load(arquivo.stream)
+        except Exception:
+            dados_log = None
+
+        # Minimap (opcional)
+        caminho_minimap = None
+        arquivo_minimap = request.files.get('minimap')
+        if arquivo_minimap and arquivo_minimap.filename:
+            pasta_minimaps = os.path.join(current_app.config['UPLOAD_FOLDER'], 'minimaps')
+            os.makedirs(pasta_minimaps, exist_ok=True)
+            caminho_minimap = salvar_arquivo_seguro(arquivo_minimap, 'minimaps', current_app.config['UPLOAD_FOLDER'])
 
         nova_sessao = LogSessao(
             id_aluno=aluno.id_aluno,
             id_criador=professor.id_professor,
             id_mapa=mapa.id_mapa,
-            caminho_arquivo_log=caminho_relativo
+            id_atividade=id_atividade,
+            caminho_arquivo_log=caminho_relativo,
+            dados_log=dados_log,
+            caminho_minimap=caminho_minimap
         )
         db.session.add(nova_sessao)
         db.session.commit()
@@ -245,12 +327,25 @@ def registar_sessao():
     
 # ==========================================
 # ROTA 4: SERVIR ARQUIVOS PARA O FRONTEND
-# Ex: GET /api/treinos/arquivos/mapas/1_2_entrada.xml
+# Aceita JWT via header Authorization OU query param ?token=
+# Ex: GET /api/treinos/arquivos/minimaps/aluno_14_...png?token=<jwt>
 # ==========================================
-@jwt_required()
 @treinos_bp.route('/arquivos/<pasta>/<nome_arquivo>', methods=['GET'])
 def baixar_arquivo(pasta, nome_arquivo):
-    if pasta not in ['mapas', 'sessoes', 'analises']:
+    # Autenticação: header Bearer ou query param token
+    from flask_jwt_extended import verify_jwt_in_request
+    try:
+        verify_jwt_in_request()
+    except Exception:
+        token_param = request.args.get('token')
+        if not token_param:
+            return jsonify({"erro": "Token não fornecido."}), 401
+        try:
+            decode_token(token_param)
+        except Exception:
+            return jsonify({"erro": "Token inválido."}), 401
+
+    if pasta not in ['mapas', 'sessoes', 'analises', 'minimaps', 'renders3d']:
         return jsonify({"erro": "Acesso negado à pasta solicitada."}), 403
 
     pasta_alvo = os.path.join(current_app.config['UPLOAD_FOLDER'], pasta)
@@ -294,6 +389,7 @@ def apropriar_mapa(id_mapa):
         copia = Mapa(
             nome_mapa=f"Cópia de {original.nome_mapa}",
             id_criador=professor.id_professor,
+            id_mapa_original=original.id_mapa,
             caminho_arquivo_xml=original.caminho_arquivo_xml,
             caminho_preview=original.caminho_preview
         )
@@ -373,6 +469,193 @@ def servir_preview(id_mapa):
 
 
 # ==========================================
+# ROTA 5B: VERIFICAR USO DO MAPA EM ATIVIDADES
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/check-uso', methods=['GET'])
+@jwt_required()
+def check_uso_mapa(id_mapa):
+    mapa = Mapa.query.get(id_mapa)
+    if not mapa:
+        return jsonify({"erro": "Mapa não encontrado."}), 404
+
+    from app.models import AtividadeMapa, Atividade
+    atividades = (
+        db.session.query(Atividade)
+        .join(AtividadeMapa, AtividadeMapa.id_atividade == Atividade.id_atividade)
+        .filter(AtividadeMapa.id_mapa == id_mapa)
+        .all()
+    )
+
+    em_ativa   = any(a.ativo for a in atividades)
+    em_inativa = any(not a.ativo for a in atividades)
+
+    return jsonify({
+        "em_atividade_ativa":   em_ativa,
+        "em_atividade_inativa": em_inativa and not em_ativa,
+        "atividades": [{"id_atividade": a.id_atividade, "nome": a.nome, "ativo": a.ativo} for a in atividades],
+    }), 200
+
+
+# ==========================================
+# ROTA 5C: CRIAR CÓPIA DE MAPA PRÓPRIO (para edição segura)
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/copia', methods=['POST'])
+@jwt_required()
+def copiar_mapa_proprio(id_mapa):
+    id_usuario_logado = get_jwt_identity()
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    original = Mapa.query.filter_by(id_mapa=id_mapa, id_criador=professor.id_professor).first()
+    if not original:
+        return jsonify({"erro": "Mapa não encontrado ou sem permissão."}), 404
+
+    try:
+        copia = Mapa(
+            nome_mapa=f"Cópia de {original.nome_mapa}",
+            id_criador=professor.id_professor,
+            id_mapa_original=original.id_mapa,
+            caminho_arquivo_xml=original.caminho_arquivo_xml,
+            caminho_preview=original.caminho_preview,
+            ativo=True,
+        )
+        db.session.add(copia)
+        db.session.commit()
+        return jsonify({
+            "mensagem": "Cópia criada com sucesso.",
+            "id_mapa": copia.id_mapa,
+            "nome_mapa": copia.nome_mapa,
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": f"Erro ao criar cópia: {str(e)}"}), 500
+
+
+# ==========================================
+# ROTA 5D: CARREGAR ARQUIVO XML DO MAPA (para o E3 editar)
+# Aceita JWT via header Authorization OU query param ?token=
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/arquivo', methods=['GET'])
+def carregar_arquivo_mapa(id_mapa):
+    from flask_jwt_extended import verify_jwt_in_request
+    try:
+        verify_jwt_in_request()
+    except Exception:
+        token_param = request.args.get('token')
+        if not token_param:
+            return jsonify({"erro": "Token não fornecido."}), 401
+        try:
+            decode_token(token_param)
+        except Exception:
+            return jsonify({"erro": "Token inválido."}), 401
+
+    mapa = Mapa.query.get(id_mapa)
+    if not mapa:
+        return jsonify({"erro": "Mapa não encontrado."}), 404
+
+    nome_arquivo = os.path.basename(mapa.caminho_arquivo_xml)
+    pasta_alvo = os.path.join(current_app.config['UPLOAD_FOLDER'], 'mapas')
+    return send_from_directory(pasta_alvo, nome_arquivo)
+
+
+# ==========================================
+# ROTA 5E: ATUALIZAR ARQUIVO XML DE MAPA EXISTENTE (salvar edição do E3)
+# - Cópia (id_mapa_original preenchido): salva em novo arquivo para não tocar no original
+# - Original (id_mapa_original nulo):    sobrescreve o arquivo existente
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/arquivo', methods=['PATCH'])
+@jwt_required()
+def atualizar_arquivo_mapa(id_mapa):
+    id_usuario_logado = get_jwt_identity()
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    mapa = Mapa.query.filter_by(id_mapa=id_mapa, id_criador=professor.id_professor).first()
+    if not mapa:
+        return jsonify({"erro": "Mapa não encontrado ou sem permissão."}), 404
+
+    arquivo = request.files.get('arquivo_mapa')
+    if not arquivo or not arquivo.filename:
+        return jsonify({"erro": "Nenhum arquivo enviado. Use o campo 'arquivo_mapa'."}), 400
+
+    if not arquivo_permitido(arquivo.filename, EXTENSOES_MAPA):
+        return jsonify({"erro": "Tipo inválido. Use .xml ou .json."}), 400
+
+    try:
+        pasta_mapas = os.path.join(current_app.config['UPLOAD_FOLDER'], 'mapas')
+        os.makedirs(pasta_mapas, exist_ok=True)
+
+        if mapa.id_mapa_original:
+            # É uma cópia — salva em novo arquivo para não tocar no original
+            novo_caminho = salvar_arquivo_seguro(arquivo, 'mapas', current_app.config['UPLOAD_FOLDER'])
+            mapa.caminho_arquivo_xml = novo_caminho
+        else:
+            # É um original — sobrescreve o arquivo existente (mantém o path)
+            nome_arquivo = os.path.basename(mapa.caminho_arquivo_xml)
+            arquivo.save(os.path.join(pasta_mapas, nome_arquivo))
+
+        # Preview opcional
+        arquivo_preview = request.files.get('arquivo_preview')
+        if arquivo_preview and arquivo_preview.filename:
+            if arquivo_permitido(arquivo_preview.filename, EXTENSOES_PREVIEW):
+                pasta_previews = os.path.join(current_app.config['UPLOAD_FOLDER'], 'previews')
+                os.makedirs(pasta_previews, exist_ok=True)
+                mapa.caminho_preview = salvar_arquivo_seguro(
+                    arquivo_preview, 'previews', current_app.config['UPLOAD_FOLDER']
+                )
+
+        nome_mapa = request.form.get('nome_mapa', '').strip()
+        if nome_mapa:
+            mapa.nome_mapa = nome_mapa
+
+        db.session.commit()
+        return jsonify({
+            "mensagem": "Mapa atualizado com sucesso.",
+            "id_mapa": mapa.id_mapa,
+            "nome_mapa": mapa.nome_mapa,
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": f"Erro ao atualizar mapa: {str(e)}"}), 500
+
+
+# ==========================================
+# ROTA 7B: DOWNLOAD DO ARQUIVO XML DO MAPA (autenticado)
+# Aceita JWT via header Authorization OU query param ?token=
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/download', methods=['GET'])
+def download_mapa(id_mapa):
+    from flask_jwt_extended import verify_jwt_in_request
+    try:
+        verify_jwt_in_request()
+    except Exception:
+        token_param = request.args.get('token')
+        if not token_param:
+            return jsonify({"erro": "Token não fornecido."}), 401
+        try:
+            decode_token(token_param)
+        except Exception:
+            return jsonify({"erro": "Token inválido."}), 401
+
+    mapa = Mapa.query.get(id_mapa)
+    if not mapa:
+        return jsonify({"erro": "Mapa não encontrado."}), 404
+    if not mapa.ativo:
+        return jsonify({"erro": "Apenas mapas ativos podem ser baixados."}), 403
+
+    nome_arquivo = os.path.basename(mapa.caminho_arquivo_xml)
+    pasta_alvo = os.path.join(current_app.config['UPLOAD_FOLDER'], 'mapas')
+    return send_from_directory(
+        pasta_alvo, nome_arquivo,
+        as_attachment=True,
+        download_name=f"{mapa.nome_mapa}.xml"
+    )
+
+
+# ==========================================
 # ROTA 8: RECEBER RENDER 3D DO ENA
 # Ex: POST /api/treinos/mapas/<id>/render3d
 # Chamado pelo ENA na primeira vez que o jogador entra no mapa.
@@ -416,8 +699,19 @@ def receber_render3d(id_mapa):
 # Ex: GET /api/treinos/mapas/<id>/render3d
 # ==========================================
 @treinos_bp.route('/mapas/<int:id_mapa>/render3d', methods=['GET'])
-@jwt_required()
 def servir_render3d(id_mapa):
+    from flask_jwt_extended import verify_jwt_in_request
+    try:
+        verify_jwt_in_request()
+    except Exception:
+        token_param = request.args.get('token')
+        if not token_param:
+            return jsonify({"erro": "Token não fornecido."}), 401
+        try:
+            decode_token(token_param)
+        except Exception:
+            return jsonify({"erro": "Token inválido."}), 401
+
     mapa = Mapa.query.get(id_mapa)
     if not mapa or not mapa.caminho_render_3d:
         return jsonify({"erro": "Render 3D não disponível."}), 404

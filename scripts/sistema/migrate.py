@@ -90,4 +90,30 @@ with app.app_context():
     else:
         skip("Coluna 'caminho_render_3d' já existe.")
 
+    # ── M005 — Adicionar colunas id_atividade, dados_log e caminho_minimap em log_sessao ──
+    print("M005: colunas id_atividade, dados_log e caminho_minimap em log_sessao")
+    for col_sql, col_name in [
+        ("id_atividade INTEGER REFERENCES atividade(id_atividade)", "id_atividade"),
+        ("dados_log JSONB",                                          "dados_log"),
+        ("caminho_minimap VARCHAR(500)",                             "caminho_minimap"),
+    ]:
+        existe = db.session.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            f"WHERE table_name='log_sessao' AND column_name='{col_name}'"
+        )).scalar()
+        if not existe:
+            db.session.execute(text(f"ALTER TABLE log_sessao ADD COLUMN {col_sql}"))
+            db.session.commit()
+            ok(f"Coluna '{col_name}' adicionada.")
+        else:
+            skip(f"Coluna '{col_name}' já existe.")
+
+    minimaps_dir = os.path.join(upload_folder, 'minimaps')
+    os.makedirs(minimaps_dir, exist_ok=True)
+    ok(f"Pasta de minimaps garantida: {minimaps_dir}")
+
+    sessoes_dir = os.path.join(upload_folder, 'sessoes')
+    os.makedirs(sessoes_dir, exist_ok=True)
+    ok(f"Pasta de sessoes garantida: {sessoes_dir}")
+
     print("\nMigrações concluídas.")

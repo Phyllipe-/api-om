@@ -1,5 +1,6 @@
 from app import db
 from datetime import datetime
+from sqlalchemy.dialects.postgresql import JSONB
 
 # -----------------------------------------
 # TABELAS DE AUTENTICAÇÃO E PERFIS
@@ -22,9 +23,15 @@ class Usuario(db.Model):
 
 class Professor(db.Model):
     __tablename__ = 'professor'
-    id_professor = db.Column(db.Integer, primary_key=True)
-    id_usuario = db.Column(db.Integer, db.ForeignKey('usuario.id_usuario'), unique=True, nullable=False)
-    registro_profissional = db.Column(db.String(50), nullable=True)
+    id_professor          = db.Column(db.Integer, primary_key=True)
+    id_usuario            = db.Column(db.Integer, db.ForeignKey('usuario.id_usuario'), unique=True, nullable=False)
+    registro_profissional = db.Column(db.String(50),  nullable=True)   # legado — mantido por compatibilidade
+    formacao_academica    = db.Column(db.Text,         nullable=True)
+    telefone              = db.Column(db.String(20),   nullable=True)
+    tipo_endereco         = db.Column(db.String(20),   nullable=True)   # 'pessoal' | 'profissional'
+    nome_instituicao      = db.Column(db.String(200),  nullable=True)
+    cep                   = db.Column(db.String(9),    nullable=True)
+    logradouro            = db.Column(db.String(300),  nullable=True)
 
 class Aluno(db.Model):
     __tablename__ = 'aluno'
@@ -33,6 +40,9 @@ class Aluno(db.Model):
     id_professor_responsavel = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
     escolaridade = db.Column(db.String(100), nullable=True)
     login = db.Column(db.String(80), unique=True, nullable=True)  # identificador curto; padrão = parte antes do '@'
+    telefone   = db.Column(db.String(20),  nullable=True)
+    cep        = db.Column(db.String(9),   nullable=True)
+    logradouro = db.Column(db.String(300), nullable=True)
 
 # -----------------------------------------
 # TABELAS DE OPERAÇÃO E LOGS (REFERÊNCIAS)
@@ -42,6 +52,7 @@ class Mapa(db.Model):
     id_mapa = db.Column(db.Integer, primary_key=True)
     nome_mapa = db.Column(db.String(150), nullable=False)
     id_criador = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
+    id_mapa_original = db.Column(db.Integer, db.ForeignKey('mapa.id_mapa'), nullable=True)  # preenchido quando é cópia
     caminho_arquivo_xml = db.Column(db.String(500), nullable=False) # URL ou path do arquivo XML
     caminho_preview     = db.Column(db.String(500), nullable=True)  # thumbnail PNG (2D, gerado pelo editor)
     caminho_render_3d   = db.Column(db.String(500), nullable=True)  # captura 3D gerada pelo ENA em runtime
@@ -50,11 +61,14 @@ class Mapa(db.Model):
 
 class LogSessao(db.Model):
     __tablename__ = 'log_sessao'
-    id_log = db.Column(db.Integer, primary_key=True)
-    id_aluno = db.Column(db.Integer, db.ForeignKey('aluno.id_aluno'), nullable=False)
-    id_criador = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
-    id_mapa = db.Column(db.Integer, db.ForeignKey('mapa.id_mapa'), nullable=False)
-    caminho_arquivo_log = db.Column(db.String(500), nullable=False) # Rota onde o CSV/JSON de passos está guardado
+    id_log                  = db.Column(db.Integer, primary_key=True)
+    id_aluno                = db.Column(db.Integer, db.ForeignKey('aluno.id_aluno'), nullable=False)
+    id_criador              = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
+    id_mapa                 = db.Column(db.Integer, db.ForeignKey('mapa.id_mapa'), nullable=False)
+    id_atividade            = db.Column(db.Integer, db.ForeignKey('atividade.id_atividade'), nullable=True)
+    caminho_arquivo_log     = db.Column(db.String(500), nullable=False)  # arquivo .json bruto
+    dados_log               = db.Column(JSONB, nullable=True)            # conteúdo parseado do log
+    caminho_minimap         = db.Column(db.String(500), nullable=True)   # minimap PNG gerado ao finalizar
     data_criacao_arquivo_log = db.Column(db.DateTime, default=datetime.utcnow)
 
 # -----------------------------------------
@@ -92,12 +106,14 @@ class Comparacao(db.Model):
 
 class Atividade(db.Model):
     __tablename__ = 'atividade'
-    id_atividade = db.Column(db.Integer, primary_key=True)
-    nome         = db.Column(db.String(150), nullable=False)
-    descricao    = db.Column(db.Text, nullable=True)
-    id_professor = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
-    data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
-    ativo        = db.Column(db.Boolean, default=True, nullable=False)
+    id_atividade              = db.Column(db.Integer, primary_key=True)
+    nome                      = db.Column(db.String(150), nullable=False)
+    descricao                 = db.Column(db.Text, nullable=True)
+    id_professor              = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
+    data_criacao              = db.Column(db.DateTime, default=datetime.utcnow)
+    ativo                     = db.Column(db.Boolean, default=True, nullable=False)
+    data_previsao_finalizacao = db.Column(db.Date,     nullable=True)   # previsão informada pelo professor
+    data_finalizacao          = db.Column(db.DateTime, nullable=True)   # preenchida ao desativar
 
 class AtividadeMapa(db.Model):
     __tablename__ = 'atividade_mapa'
