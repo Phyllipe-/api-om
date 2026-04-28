@@ -279,6 +279,38 @@ def apropriar_aluno(id_aluno):
 
 
 # ==========================================
+# ROTA PÚBLICA: IDENTIFICAR ALUNO POR LOGIN OU EMAIL (sem JWT)
+# Permite que o app ENA carregue o aluno sem exigir login do professor.
+# ==========================================
+@alunos_bp.route('/identificar', methods=['GET'])
+def identificar_aluno_publico():
+    q = request.args.get('q', '').strip()
+    if not q:
+        return jsonify({"erro": "Parâmetro 'q' obrigatório."}), 400
+
+    aluno = None
+    if '@' in q:
+        usr = Usuario.query.filter_by(email=q).first()
+        if usr:
+            aluno = Aluno.query.filter_by(id_usuario=usr.id_usuario).first()
+    else:
+        aluno = Aluno.query.filter(
+            db.func.lower(Aluno.login) == q.lower()
+        ).first()
+        if aluno:
+            usr = Usuario.query.get(aluno.id_usuario)
+
+    if not aluno or not usr or not usr.ativo:
+        return jsonify({"erro": "Aluno não encontrado."}), 404
+
+    return jsonify({
+        "id_aluno":      aluno.id_aluno,
+        "nome_completo": usr.nome_completo,
+        "login":         _login_efetivo(aluno, usr),
+    }), 200
+
+
+# ==========================================
 # ROTA 5d: VERIFICAR DISPONIBILIDADE DE LOGIN
 # ==========================================
 @alunos_bp.route('/check-login', methods=['GET'])
