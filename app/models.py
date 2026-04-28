@@ -112,6 +112,7 @@ class Atividade(db.Model):
     id_professor              = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
     data_criacao              = db.Column(db.DateTime, default=datetime.utcnow)
     ativo                     = db.Column(db.Boolean, default=True, nullable=False)
+    sequencia_livre           = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
     data_previsao_finalizacao = db.Column(db.Date,     nullable=True)   # previsão informada pelo professor
     data_finalizacao          = db.Column(db.DateTime, nullable=True)   # preenchida ao desativar
 

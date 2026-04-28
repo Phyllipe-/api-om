@@ -53,8 +53,9 @@ def _serializar_atividade(at, incluir_detalhes=False):
         "periodo_inicio": periodos_inicio,
         "periodo_fim":    periodos_fim,
         # Estado
-        "finalizada": at.data_finalizacao is not None,
-        "tem_logs":   LogSessao.query.filter_by(id_atividade=at.id_atividade).count() > 0,
+        "finalizada":      at.data_finalizacao is not None,
+        "tem_logs":        LogSessao.query.filter_by(id_atividade=at.id_atividade).count() > 0,
+        "sequencia_livre": at.sequencia_livre,
     }
     if incluir_detalhes:
         mapas = (
@@ -116,6 +117,7 @@ def criar_atividade():
             descricao=dados.get('descricao', ''),
             id_professor=professor.id_professor,
             data_previsao_finalizacao=data_previsao,
+            sequencia_livre=bool(dados.get('sequencia_livre', False)),
         )
         db.session.add(nova)
         db.session.flush()
@@ -219,6 +221,9 @@ def editar_atividade(id_atividade):
                 return jsonify({"erro": "Formato de data inválido. Use YYYY-MM-DD."}), 400
         else:
             at.data_previsao_finalizacao = None
+
+    if 'sequencia_livre' in dados:
+        at.sequencia_livre = bool(dados['sequencia_livre'])
 
     if 'mapas' in dados:
         if not dados['mapas']:
@@ -407,18 +412,33 @@ def atividade_para_aluno(id_aluno):
     mapas_payload = []
     for am in mapas:
         mapa = Mapa.query.get(am.id_mapa)
-        if mapa:
-            mapas_payload.append({
-                "id_mapa": mapa.id_mapa,
-                "ordem": am.ordem,
-                "nome_mapa": mapa.nome_mapa,
-                "caminho_arquivo_xml": mapa.caminho_arquivo_xml,
-                "caminho_preview": mapa.caminho_preview,
-            })
+        if not mapa:
+            continue
+
+        # Verifica se o aluno concluiu este mapa nesta atividade
+        sessoes = LogSessao.query.filter_by(
+            id_aluno=id_aluno,
+            id_mapa=mapa.id_mapa,
+            id_atividade=atividade.id_atividade
+        ).all()
+        concluido = any(
+            (s.dados_log or {}).get('results', {}).get('clearedMap', False)
+            for s in sessoes
+        )
+
+        mapas_payload.append({
+            "id_mapa":             mapa.id_mapa,
+            "ordem":               am.ordem,
+            "nome_mapa":           mapa.nome_mapa,
+            "caminho_arquivo_xml": mapa.caminho_arquivo_xml,
+            "caminho_preview":     mapa.caminho_preview,
+            "concluido":           concluido,
+        })
 
     return jsonify({
-        "id_atividade": atividade.id_atividade,
-        "nome": atividade.nome,
-        "descricao": atividade.descricao,
-        "mapas": mapas_payload
+        "id_atividade":   atividade.id_atividade,
+        "nome":           atividade.nome,
+        "descricao":      atividade.descricao,
+        "sequencia_livre": atividade.sequencia_livre,
+        "mapas":          mapas_payload,
     }), 200
