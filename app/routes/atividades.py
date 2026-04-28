@@ -442,3 +442,67 @@ def atividade_para_aluno(id_aluno):
         "sequencia_livre": atividade.sequencia_livre,
         "mapas":          mapas_payload,
     }), 200
+
+
+# ==========================================
+# ROTA PÚBLICA: ATIVIDADE DO ALUNO (sem JWT)
+# Permite que o app ENA carregue a atividade sem exigir login do professor.
+# ==========================================
+@atividades_bp.route('/publica/<int:id_aluno>', methods=['GET'])
+def atividade_publica(id_aluno):
+    aluno = Aluno.query.get(id_aluno)
+    if not aluno:
+        return jsonify({"erro": "Aluno não encontrado."}), 404
+
+    atividade = (
+        Atividade.query
+        .join(AtividadeAluno, AtividadeAluno.id_atividade == Atividade.id_atividade)
+        .filter(
+            Atividade.ativo == True,
+            AtividadeAluno.id_aluno == id_aluno
+        )
+        .order_by(Atividade.data_criacao.desc())
+        .first()
+    )
+    if not atividade:
+        return jsonify({"erro": "Nenhuma atividade ativa encontrada para este aluno."}), 404
+
+    mapas = (
+        AtividadeMapa.query
+        .filter_by(id_atividade=atividade.id_atividade)
+        .order_by(AtividadeMapa.ordem)
+        .all()
+    )
+
+    mapas_payload = []
+    for am in mapas:
+        mapa = Mapa.query.get(am.id_mapa)
+        if not mapa:
+            continue
+
+        sessoes = LogSessao.query.filter_by(
+            id_aluno=id_aluno,
+            id_mapa=mapa.id_mapa,
+            id_atividade=atividade.id_atividade
+        ).all()
+        concluido = any(
+            (s.dados_log or {}).get('results', {}).get('clearedMap', False)
+            for s in sessoes
+        )
+
+        mapas_payload.append({
+            "id_mapa":             mapa.id_mapa,
+            "ordem":               am.ordem,
+            "nome_mapa":           mapa.nome_mapa,
+            "caminho_arquivo_xml": mapa.caminho_arquivo_xml,
+            "caminho_preview":     mapa.caminho_preview,
+            "concluido":           concluido,
+        })
+
+    return jsonify({
+        "id_atividade":    atividade.id_atividade,
+        "nome":            atividade.nome,
+        "descricao":       atividade.descricao,
+        "sequencia_livre": atividade.sequencia_livre,
+        "mapas":           mapas_payload,
+    }), 200

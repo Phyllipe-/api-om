@@ -332,18 +332,20 @@ def registar_sessao():
 # ==========================================
 @treinos_bp.route('/arquivos/<pasta>/<nome_arquivo>', methods=['GET'])
 def baixar_arquivo(pasta, nome_arquivo):
-    # Autenticação: header Bearer ou query param token
-    from flask_jwt_extended import verify_jwt_in_request
-    try:
-        verify_jwt_in_request()
-    except Exception:
-        token_param = request.args.get('token')
-        if not token_param:
-            return jsonify({"erro": "Token não fornecido."}), 401
+    # Pasta 'mapas' é pública — permite download de XMLs sem autenticação
+    # (necessário para o modo quiosque do app ENA sem login do professor)
+    if pasta != 'mapas':
+        from flask_jwt_extended import verify_jwt_in_request
         try:
-            decode_token(token_param)
+            verify_jwt_in_request()
         except Exception:
-            return jsonify({"erro": "Token inválido."}), 401
+            token_param = request.args.get('token')
+            if not token_param:
+                return jsonify({"erro": "Token não fornecido."}), 401
+            try:
+                decode_token(token_param)
+            except Exception:
+                return jsonify({"erro": "Token inválido."}), 401
 
     if pasta not in ['mapas', 'sessoes', 'analises', 'minimaps', 'renders3d']:
         return jsonify({"erro": "Acesso negado à pasta solicitada."}), 403
