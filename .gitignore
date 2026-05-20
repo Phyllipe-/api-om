@@ -8,3 +8,4 @@ uploads/
 *.db
 *.sqlite3
 .DS_Store
+../DEPLOY-NOTES.md
