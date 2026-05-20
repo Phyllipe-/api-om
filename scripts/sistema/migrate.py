@@ -116,4 +116,103 @@ with app.app_context():
     os.makedirs(sessoes_dir, exist_ok=True)
     ok(f"Pasta de sessoes garantida: {sessoes_dir}")
 
+    # ── M006 — Adicionar coluna `sequencia_livre` em `atividade` ─────────
+    print("M006: coluna sequencia_livre em atividade")
+    existe = db.session.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='atividade' AND column_name='sequencia_livre'"
+    )).scalar()
+    if not existe:
+        db.session.execute(text(
+            "ALTER TABLE atividade ADD COLUMN sequencia_livre BOOLEAN NOT NULL DEFAULT FALSE"
+        ))
+        db.session.commit()
+        ok("Coluna 'sequencia_livre' adicionada.")
+    else:
+        skip("Coluna 'sequencia_livre' já existe.")
+
+    # ── M007 — Adicionar campos de contato em `aluno` ────────────────────
+    print("M007: campos de contato em aluno (telefone, cep, logradouro)")
+    for col_sql, col_name in [
+        ("telefone VARCHAR(20)",    "telefone"),
+        ("cep VARCHAR(9)",          "cep"),
+        ("logradouro VARCHAR(300)", "logradouro"),
+    ]:
+        existe = db.session.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            f"WHERE table_name='aluno' AND column_name='{col_name}'"
+        )).scalar()
+        if not existe:
+            db.session.execute(text(f"ALTER TABLE aluno ADD COLUMN {col_sql}"))
+            db.session.commit()
+            ok(f"Coluna '{col_name}' adicionada em aluno.")
+        else:
+            skip(f"aluno.{col_name} já existe.")
+
+    # ── M008 — Adicionar campos de endereço em `professor` ───────────────
+    print("M008: campos de endereço em professor")
+    for col_sql, col_name in [
+        ("tipo_endereco VARCHAR(20)",   "tipo_endereco"),
+        ("nome_instituicao VARCHAR(200)", "nome_instituicao"),
+        ("cep VARCHAR(9)",              "cep"),
+        ("logradouro VARCHAR(300)",     "logradouro"),
+    ]:
+        existe = db.session.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            f"WHERE table_name='professor' AND column_name='{col_name}'"
+        )).scalar()
+        if not existe:
+            db.session.execute(text(f"ALTER TABLE professor ADD COLUMN {col_sql}"))
+            db.session.commit()
+            ok(f"Coluna '{col_name}' adicionada em professor.")
+        else:
+            skip(f"professor.{col_name} já existe.")
+
+    # ── M009 — Adicionar datas de ciclo de vida em `atividade` ───────────
+    print("M009: datas de ciclo de vida em atividade (previsao, finalizacao)")
+    for col_sql, col_name in [
+        ("data_previsao_finalizacao DATE",      "data_previsao_finalizacao"),
+        ("data_finalizacao TIMESTAMP",          "data_finalizacao"),
+    ]:
+        existe = db.session.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            f"WHERE table_name='atividade' AND column_name='{col_name}'"
+        )).scalar()
+        if not existe:
+            db.session.execute(text(f"ALTER TABLE atividade ADD COLUMN {col_sql}"))
+            db.session.commit()
+            ok(f"Coluna '{col_name}' adicionada em atividade.")
+        else:
+            skip(f"atividade.{col_name} já existe.")
+
+    # ── M010 — Adicionar coluna `ativo` em `mapa` ────────────────────────
+    print("M010: coluna ativo em mapa")
+    existe = db.session.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='mapa' AND column_name='ativo'"
+    )).scalar()
+    if not existe:
+        db.session.execute(text(
+            "ALTER TABLE mapa ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT TRUE"
+        ))
+        db.session.commit()
+        ok("Coluna 'ativo' adicionada em mapa.")
+    else:
+        skip("mapa.ativo já existe.")
+
+    # ── M011 — Adicionar coluna `id_mapa_original` em `mapa` ─────────────
+    print("M011: coluna id_mapa_original em mapa")
+    existe = db.session.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='mapa' AND column_name='id_mapa_original'"
+    )).scalar()
+    if not existe:
+        db.session.execute(text(
+            "ALTER TABLE mapa ADD COLUMN id_mapa_original INTEGER REFERENCES mapa(id_mapa)"
+        ))
+        db.session.commit()
+        ok("Coluna 'id_mapa_original' adicionada em mapa.")
+    else:
+        skip("mapa.id_mapa_original já existe.")
+
     print("\nMigrações concluídas.")

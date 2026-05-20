@@ -129,3 +129,27 @@ class AtividadeAluno(db.Model):
     id_atividade     = db.Column(db.Integer, db.ForeignKey('atividade.id_atividade'), nullable=False)
     id_aluno         = db.Column(db.Integer, db.ForeignKey('aluno.id_aluno'), nullable=False)
     data_atribuicao  = db.Column(db.DateTime, default=datetime.utcnow)
+
+# -----------------------------------------
+# TABELAS DE PERSONALIZAÇÃO DE QUADROS
+# -----------------------------------------
+class Quadro(db.Model):
+    __tablename__ = 'quadro'
+    id             = db.Column(db.Integer, primary_key=True)
+    chave          = db.Column(db.String(80),  unique=True, nullable=False)   # slug imutável
+    nome           = db.Column(db.String(150), nullable=False)                # editável pelo admin
+    secao          = db.Column(db.String(30),  nullable=False)                # esquerda | centro | direita | multi
+    tamanho        = db.Column(db.String(20),  nullable=False)                # fixo | pequeno | medio | grande
+    ordem_padrao          = db.Column(db.Integer,  nullable=False, default=0)
+    ativo_padrao          = db.Column(db.Boolean,  nullable=False, default=True)
+    personalizavel        = db.Column(db.Boolean,  nullable=False, default=True)
+    exclusivo_sessao_unica = db.Column(db.Boolean, nullable=False, default=False)
+
+class PreferenciaQuadro(db.Model):
+    __tablename__ = 'preferencia_quadro'
+    id           = db.Column(db.Integer, primary_key=True)
+    id_usuario   = db.Column(db.Integer, db.ForeignKey('usuario.id_usuario'), nullable=False)
+    chave_quadro = db.Column(db.String(80), db.ForeignKey('quadro.chave'),    nullable=False)
+    visivel      = db.Column(db.Boolean, nullable=False, default=True)
+    ordem        = db.Column(db.Integer, nullable=True)
+    __table_args__ = (db.UniqueConstraint('id_usuario', 'chave_quadro', name='uq_pref_usuario_quadro'),)

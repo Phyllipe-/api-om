@@ -1,11 +1,14 @@
+import logging
 from flask import Blueprint, request, jsonify, current_app, send_from_directory
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt, decode_token
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt, verify_jwt_in_request
 from datetime import datetime
 import os, json
 
-from app import db
+from app import db, limiter
 from app.models import Professor, Aluno, Mapa, LogSessao, TipoPessoa, Usuario
 from app.utils import arquivo_permitido, salvar_arquivo_seguro, EXTENSOES_MAPA
+
+log = logging.getLogger(__name__)
 
 EXTENSOES_PREVIEW = {'png', 'jpg', 'jpeg', 'webp'}
 
@@ -332,23 +335,16 @@ def registar_sessao():
 # ==========================================
 @treinos_bp.route('/arquivos/<pasta>/<nome_arquivo>', methods=['GET'])
 def baixar_arquivo(pasta, nome_arquivo):
-    # Pasta 'mapas' é pública — permite download de XMLs sem autenticação
-    # (necessário para o modo quiosque do app ENA sem login do professor)
+    PASTAS_PERMITIDAS = {'mapas', 'sessoes', 'analises', 'minimaps', 'renders3d'}
+    if pasta not in PASTAS_PERMITIDAS:
+        return jsonify({"erro": "Acesso negado à pasta solicitada."}), 403
+
+    # Pasta 'mapas' é pública (modo quiosque do app ENA sem login do professor)
     if pasta != 'mapas':
-        from flask_jwt_extended import verify_jwt_in_request
         try:
             verify_jwt_in_request()
         except Exception:
-            token_param = request.args.get('token')
-            if not token_param:
-                return jsonify({"erro": "Token não fornecido."}), 401
-            try:
-                decode_token(token_param)
-            except Exception:
-                return jsonify({"erro": "Token inválido."}), 401
-
-    if pasta not in ['mapas', 'sessoes', 'analises', 'minimaps', 'renders3d']:
-        return jsonify({"erro": "Acesso negado à pasta solicitada."}), 403
+            return jsonify({"erro": "Token não fornecido ou inválido."}), 401
 
     pasta_alvo = os.path.join(current_app.config['UPLOAD_FOLDER'], pasta)
     return send_from_directory(pasta_alvo, nome_arquivo)
