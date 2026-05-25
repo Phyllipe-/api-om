@@ -9,8 +9,10 @@ info:
   version: 2.0.0
 
 servers:
+  - url: https://api.omaproject.com.br/api
+    description: Produção
   - url: http://127.0.0.1:5000/api
-    description: Servidor local de desenvolvimento
+    description: Desenvolvimento local
 
 components:
   securitySchemes:
@@ -65,14 +67,30 @@ components:
     Atividade:
       type: object
       properties:
-        id_atividade:   { type: integer, example: 2 }
-        nome:           { type: string,  example: "Treino Básico" }
-        descricao:      { type: string,  example: "Percurso inicial com dois mapas." }
-        ativo:          { type: boolean, example: true }
-        data_criacao:   { type: string,  example: "2026-02-10 09:00" }
-        nome_professor: { type: string,  example: "Prof. Ana Lima" }
-        total_mapas:    { type: integer, example: 2 }
-        total_alunos:   { type: integer, example: 5 }
+        id_atividade:               { type: integer, example: 2 }
+        nome:                       { type: string,  example: "Treino Básico" }
+        descricao:                  { type: string,  example: "Percurso inicial com dois mapas." }
+        ativo:                      { type: boolean, example: true }
+        sequencia_livre:            { type: boolean, example: false, description: "Se true, o aluno pode acessar todos os mapas sem ordem obrigatória." }
+        data_criacao:               { type: string,  example: "2026-02-10 09:00" }
+        data_previsao_finalizacao:  { type: string,  format: date, nullable: true, example: "2026-06-30" }
+        data_finalizacao:           { type: string,  nullable: true, example: "2026-06-15 14:00" }
+        finalizada:                 { type: boolean, example: false }
+        dias_duracao:               { type: integer, nullable: true, example: 45 }
+        nome_professor:             { type: string,  example: "Prof. Ana Lima" }
+        total_mapas:                { type: integer, example: 2 }
+        total_alunos:               { type: integer, example: 5 }
+        tem_logs:                   { type: boolean, example: true }
+
+    AtividadeMapaItem:
+      type: object
+      properties:
+        id_mapa:             { type: integer, example: 1 }
+        ordem:               { type: integer, example: 1 }
+        nome_mapa:           { type: string,  example: "Casa Nível 1" }
+        caminho_arquivo_xml: { type: string,  example: "mapas/1_casa.xml" }
+        caminho_preview:     { type: string,  nullable: true }
+        concluido:           { type: boolean, example: false, description: "Se o aluno já completou este mapa nesta atividade." }
 
     Error:
       type: object
@@ -131,10 +149,52 @@ paths:
         '401': { description: Email ou senha incorretos }
         '403': { description: Conta desativada }
 
+  /auth/register-public:
+    post:
+      tags: [Autenticação]
+      summary: Auto-cadastro de Professor
+      description: Rota pública para que um professor se cadastre sem autenticação. Senha mínima de 6 caracteres.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nome_completo, data_nascimento, email, senha]
+              properties:
+                nome_completo:   { type: string, example: "Prof. Carlos Melo" }
+                data_nascimento: { type: string, format: date, example: "1980-04-22" }
+                email:           { type: string, example: "carlos@escola.edu.br" }
+                senha:           { type: string, example: "senha123" }
+      responses:
+        '201': { description: Conta criada com sucesso }
+        '400': { description: Campos obrigatórios ausentes ou senha curta }
+        '409': { description: Email já cadastrado }
+
+  /auth/check-email:
+    get:
+      tags: [Autenticação]
+      summary: Verificar Disponibilidade de E-mail
+      description: Verifica se um e-mail já está cadastrado no sistema. Rota pública.
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema: { type: string, example: "novo@email.com" }
+      responses:
+        '200':
+          description: Resultado da verificação
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  disponivel: { type: boolean }
+
   /auth/register:
     post:
       tags: [Autenticação]
-      summary: Cadastrar Professor
+      summary: Cadastrar Professor (Admin)
       description: Cria um novo professor. Restrito ao administrador (id_usuario = 1).
       security:
         - bearerAuth: []
@@ -239,6 +299,27 @@ paths:
         '404': { description: Professor não encontrado }
         '409': { description: Email já em uso }
 
+  /professores/{id_professor}/delete:
+    delete:
+      tags: [Professores]
+      summary: Remover Professor
+      description: >
+        Remove permanentemente um professor e seu usuário.
+        Bloqueado se houver alunos, mapas, atividades ou sessões vinculadas.
+        Não é possível remover o administrador.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_professor
+          in: path
+          required: true
+          schema: { type: integer, example: 2 }
+      responses:
+        '200': { description: Professor removido com sucesso }
+        '403': { description: Acesso negado }
+        '404': { description: Professor não encontrado }
+        '409': { description: Professor possui dependências (alunos, mapas, atividades ou sessões) }
+
   /professores/{id_professor}/ativo:
     patch:
       tags: [Professores]
@@ -315,10 +396,125 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/Aluno' }
 
+  /alunos/identificar:
+    get:
+      tags: [Alunos]
+      summary: Identificar Aluno (público — sem JWT)
+      description: >
+        Busca um aluno globalmente por login ou email sem exigir autenticação.
+        Usado pelo app ENA no modo quiosque (sem professor configurado).
+        Retorna apenas alunos ativos.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Login curto ou email completo do aluno
+          schema: { type: string, example: "joao.silva" }
+      responses:
+        '200':
+          description: Aluno encontrado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_aluno:      { type: integer }
+                  nome_completo: { type: string }
+                  login:         { type: string }
+        '404': { description: Aluno não encontrado ou inativo }
+
+  /alunos/check-login:
+    get:
+      tags: [Alunos]
+      summary: Verificar Disponibilidade de Login
+      description: Verifica se um login já está em uso. Suporta exclusão de um aluno pelo `exclude_id` (para edição).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: login
+          in: query
+          required: true
+          schema: { type: string, example: "joao.silva" }
+        - name: exclude_id
+          in: query
+          required: false
+          schema: { type: integer, example: 3 }
+      responses:
+        '200':
+          description: Disponibilidade do login
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  disponivel: { type: boolean }
+
+  /alunos/buscar-todos:
+    get:
+      tags: [Alunos]
+      summary: Busca Global de Alunos
+      description: >
+        Com busca (`q`): retorna alunos de todos os professores que correspondam ao termo.
+        Sem busca: retorna apenas os alunos do professor logado (admin vê todos).
+        Inclui campo `is_meu` indicando se o aluno pertence ao professor autenticado.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, example: "João" }
+      responses:
+        '200':
+          description: Lista de alunos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:  { type: integer }
+                  alunos:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id_aluno:      { type: integer }
+                        nome_completo: { type: string }
+                        login:         { type: string }
+                        professor:     { type: string }
+                        id_professor:  { type: integer }
+                        is_meu:        { type: boolean }
+                        ativo:         { type: boolean }
+
+  /alunos/{id_aluno}/apropriar:
+    post:
+      tags: [Alunos]
+      summary: Apropriar Aluno
+      description: Transfere a responsabilidade de um aluno inativo de outro professor para o professor autenticado.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_aluno
+          in: path
+          required: true
+          schema: { type: integer, example: 5 }
+      responses:
+        '200':
+          description: Aluno transferido com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_aluno:    { type: integer }
+                  id_professor: { type: integer }
+        '400': { description: Aluno está ativo ou já pertence ao professor }
+        '404': { description: Aluno não encontrado }
+
   /alunos/buscar:
     get:
       tags: [Alunos]
-      summary: Buscar Aluno por Email ou Login
+      summary: Buscar Aluno por Email ou Login (escopo do professor)
       description: >
         Localiza um aluno do professor autenticado pelo email ou pelo login curto.
         Se o parâmetro `q` contiver `@`, a busca é feita por email; caso contrário, por login.
@@ -750,6 +946,35 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/Atividade' }
 
+  /atividades/publica/{id_aluno}:
+    get:
+      tags: [Atividades]
+      summary: Atividade Pública do Aluno (sem JWT)
+      description: >
+        Retorna a atividade ativa mais recente do aluno sem exigir autenticação.
+        Usado pelo app ENA no modo quiosque. Inclui campo `concluido` por mapa.
+      parameters:
+        - name: id_aluno
+          in: path
+          required: true
+          schema: { type: integer, example: 3 }
+      responses:
+        '200':
+          description: Atividade com mapas e estado de conclusão
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_atividade:    { type: integer }
+                  nome:            { type: string }
+                  descricao:       { type: string }
+                  sequencia_livre: { type: boolean }
+                  mapas:
+                    type: array
+                    items: { $ref: '#/components/schemas/AtividadeMapaItem' }
+        '404': { description: Aluno não encontrado ou sem atividade ativa }
+
   /atividades/{id_atividade}:
     get:
       tags: [Atividades]
@@ -789,6 +1014,44 @@ paths:
                             nome_completo: { type: string }
         '404': { description: Atividade não encontrada }
 
+  /atividades/{id_atividade}:
+    patch:
+      tags: [Atividades]
+      summary: Editar Atividade
+      description: Atualiza dados, mapas ou alunos de uma atividade. Envie apenas os campos a alterar.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_atividade
+          in: path
+          required: true
+          schema: { type: integer, example: 2 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nome:                      { type: string,  example: "Treino Avançado" }
+                descricao:                 { type: string,  example: "Percurso com obstáculos." }
+                sequencia_livre:           { type: boolean, example: true }
+                data_previsao_finalizacao: { type: string,  format: date, example: "2026-12-01" }
+                mapas:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id_mapa: { type: integer }
+                      ordem:   { type: integer }
+                alunos:
+                  type: array
+                  items: { type: integer }
+      responses:
+        '200': { description: Atividade atualizada }
+        '400': { description: Lista de mapas vazia ou data inválida }
+        '404': { description: Atividade não encontrada }
+
   /atividades/{id_atividade}/ativo:
     patch:
       tags: [Atividades]
@@ -810,6 +1073,56 @@ paths:
                 properties:
                   id_atividade: { type: integer }
                   ativo:        { type: boolean }
+        '404': { description: Atividade não encontrada }
+
+  /atividades/{id_atividade}/finalizar:
+    post:
+      tags: [Atividades]
+      summary: Finalizar Atividade
+      description: Marca a atividade como finalizada e a desativa. Operação irreversível — use "Copiar" para criar nova.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_atividade
+          in: path
+          required: true
+          schema: { type: integer, example: 2 }
+      responses:
+        '200':
+          description: Atividade finalizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_atividade:    { type: integer }
+                  ativo:           { type: boolean }
+                  data_finalizacao: { type: string }
+        '409': { description: Atividade já finalizada ou inativa }
+        '404': { description: Atividade não encontrada }
+
+  /atividades/{id_atividade}/copia:
+    post:
+      tags: [Atividades]
+      summary: Copiar Atividade
+      description: Cria uma cópia da atividade (sem alunos). Útil para reabrir uma atividade finalizada.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_atividade
+          in: path
+          required: true
+          schema: { type: integer, example: 2 }
+      responses:
+        '201':
+          description: Cópia criada com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_atividade: { type: integer }
+                  nome:         { type: string }
         '404': { description: Atividade não encontrada }
 
   /atividades/para-aluno/{id_aluno}:
@@ -837,17 +1150,328 @@ paths:
                   id_atividade: { type: integer }
                   nome:         { type: string }
                   descricao:    { type: string }
+                  sequencia_livre: { type: boolean }
                   mapas:
+                    type: array
+                    items: { $ref: '#/components/schemas/AtividadeMapaItem' }
+        '404': { description: Nenhuma atividade ativa encontrada para o aluno }
+
+  # ============================================================
+  # MAPAS — rotas complementares
+  # ============================================================
+
+  /treinos/mapas/{id_mapa}/preview:
+    patch:
+      tags: [Mapas e Treinos]
+      summary: Atualizar Preview do Mapa
+      description: Substitui a imagem de preview de um mapa (PNG/JPG/WEBP). Remove o anterior.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [arquivo_preview]
+              properties:
+                arquivo_preview:
+                  type: string
+                  format: binary
+      responses:
+        '200': { description: Preview atualizado }
+        '400': { description: Arquivo ausente ou formato inválido }
+        '404': { description: Mapa não encontrado }
+
+  /treinos/mapas/{id_mapa}/arquivo:
+    get:
+      tags: [Mapas e Treinos]
+      summary: Carregar XML do Mapa
+      description: Retorna o arquivo XML do mapa para edição no E3. Aceita JWT via header ou `?token=`.
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+        - name: token
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Arquivo XML
+          content:
+            application/xml: {}
+        '401': { description: Token não fornecido ou inválido }
+        '404': { description: Mapa não encontrado }
+
+    patch:
+      tags: [Mapas e Treinos]
+      summary: Atualizar XML do Mapa
+      description: >
+        Salva uma versão editada do arquivo XML.
+        Para cópias, gera novo arquivo sem alterar o original.
+        Para originais, sobrescreve o arquivo existente.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [arquivo_mapa]
+              properties:
+                arquivo_mapa:
+                  type: string
+                  format: binary
+                arquivo_preview:
+                  type: string
+                  format: binary
+                nome_mapa:
+                  type: string
+      responses:
+        '200': { description: Mapa atualizado }
+        '400': { description: Arquivo ausente ou formato inválido }
+        '404': { description: Mapa não encontrado ou sem permissão }
+
+  /treinos/mapas/{id_mapa}/download:
+    get:
+      tags: [Mapas e Treinos]
+      summary: Download do XML do Mapa
+      description: Força download do arquivo XML com nome amigável. Aceita JWT via header ou `?token=`.
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+        - name: token
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Download do arquivo XML
+          content:
+            application/xml: {}
+        '401': { description: Token não fornecido ou inválido }
+        '403': { description: Mapa inativo }
+        '404': { description: Mapa não encontrado }
+
+  /treinos/mapas/{id_mapa}/copia:
+    post:
+      tags: [Mapas e Treinos]
+      summary: Copiar Mapa Próprio
+      description: Cria uma cópia do registro do mapa para permitir edição segura sem alterar o original.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      responses:
+        '201':
+          description: Cópia criada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_mapa:   { type: integer }
+                  nome_mapa: { type: string }
+        '404': { description: Mapa não encontrado ou sem permissão }
+
+  /treinos/mapas/{id_mapa}/check-uso:
+    get:
+      tags: [Mapas e Treinos]
+      summary: Verificar Uso do Mapa em Atividades
+      description: Indica se o mapa está vinculado a atividades ativas ou inativas.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: Uso do mapa
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  em_atividade_ativa:   { type: boolean }
+                  em_atividade_inativa: { type: boolean }
+                  atividades:
                     type: array
                     items:
                       type: object
                       properties:
-                        id_mapa:             { type: integer }
-                        ordem:               { type: integer }
-                        nome_mapa:           { type: string }
-                        caminho_arquivo_xml: { type: string }
-                        caminho_preview:     { type: string, nullable: true }
-        '404': { description: Nenhuma atividade ativa encontrada para o aluno }
+                        id_atividade: { type: integer }
+                        nome:         { type: string }
+                        ativo:        { type: boolean }
+
+  /treinos/mapas/{id_mapa}/render3d:
+    post:
+      tags: [Mapas e Treinos]
+      summary: Enviar Render 3D
+      description: Recebe e armazena a captura 3D gerada pelo ENA na primeira vez que o aluno entra no mapa.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [render3d]
+              properties:
+                render3d:
+                  type: string
+                  format: binary
+      responses:
+        '201': { description: Render recebido e salvo }
+        '400': { description: Arquivo ausente ou formato inválido }
+        '404': { description: Mapa não encontrado }
+
+    get:
+      tags: [Mapas e Treinos]
+      summary: Servir Render 3D
+      description: Retorna a captura 3D do mapa. Aceita JWT via header ou `?token=`.
+      parameters:
+        - name: id_mapa
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+        - name: token
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Imagem do render 3D
+          content:
+            image/png: {}
+            image/jpeg: {}
+        '404': { description: Render não disponível }
+
+  /treinos/sessoes/{id_log}:
+    get:
+      tags: [Mapas e Treinos]
+      summary: Detalhe de uma Sessão
+      description: Retorna dados completos de uma sessão, incluindo o JSON de log, métricas brutas e minimap.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_log
+          in: path
+          required: true
+          schema: { type: integer, example: 7 }
+      responses:
+        '200':
+          description: Detalhe da sessão
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_log:               { type: integer }
+                  id_mapa:              { type: integer }
+                  nome_mapa:            { type: string }
+                  data:                 { type: string }
+                  cleared_map:          { type: boolean }
+                  tempo_sessao:         { type: number, nullable: true }
+                  total_acoes:          { type: integer }
+                  total_colisoes:       { type: integer }
+                  total_objetivos:      { type: integer }
+                  objetivos_concluidos: { type: integer }
+                  caminho_minimap:      { type: string, nullable: true }
+                  dados_log:            { type: object }
+        '404': { description: Sessão não encontrada ou sem permissão }
+
+  # ============================================================
+  # ANÁLISES — métricas calculadas
+  # ============================================================
+
+  /analises/sessao/{id_log}/metricas:
+    get:
+      tags: [Análises]
+      summary: Métricas de uma Sessão
+      description: >
+        Calcula e retorna as 3 métricas de OM da sessão prontas para o radar chart:
+        Precisão (colisões vs ações), Objetivos (metas concluídas) e Fluidez (posições únicas / passos).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_log
+          in: path
+          required: true
+          schema: { type: integer, example: 7 }
+      responses:
+        '200':
+          description: Métricas calculadas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_log: { type: integer }
+                  metricas:
+                    type: object
+                    properties:
+                      precisao:  { type: number, example: 87.5, description: "0–100 — baseada em colisões vs ações" }
+                      objetivos: { type: number, example: 100.0, description: "0–100 — metas alcançadas / total" }
+                      fluidez:   { type: number, example: 72.3, description: "0–100 — posições únicas / passos totais" }
+                  atividade_finalizada: { type: boolean }
+        '404': { description: Sessão não encontrada ou dados de log não disponíveis }
+
+  /analises/aluno/{id_aluno}/metricas:
+    get:
+      tags: [Análises]
+      summary: Métricas Agregadas do Aluno
+      description: Retorna a média das 3 métricas de todas as sessões com dados disponíveis do aluno.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_aluno
+          in: path
+          required: true
+          schema: { type: integer, example: 3 }
+      responses:
+        '200':
+          description: Médias de métricas do aluno
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id_aluno:      { type: integer }
+                  total_sessoes: { type: integer }
+                  metricas:
+                    type: object
+                    properties:
+                      precisao:  { type: number }
+                      objetivos: { type: number }
+                      fluidez:   { type: number }
+                  atividade_finalizada: { type: boolean }
+        '404': { description: Aluno não encontrado ou nenhuma sessão com dados }
 
   # ============================================================
   # ANÁLISES

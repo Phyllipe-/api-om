@@ -1,0 +1,57 @@
+name: CI / CD
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [develop, master]
+
+jobs:
+  # ── TESTES (roda em todos os branches) ────────────────────────────────────────
+  test:
+    name: Testes
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Instalar dependências de dev
+        run: pip install -r requirements-dev.txt
+
+      - name: Rodar testes
+        run: pytest -v
+        env:
+          DATABASE_URL: sqlite:///:memory:
+          JWT_SECRET_KEY: ci-secret-key-apenas-para-testes
+          ALLOWED_ORIGINS: http://localhost:3000
+          FLASK_ENV: testing
+          REGISTRO_PUBLICO: 'false'
+
+  # ── DEPLOY PRODUÇÃO (apenas main) ─────────────────────────────────────────────
+  deploy:
+    name: Deploy — Oracle VM
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/api-om
+            git pull origin main
+            source venv/bin/activate
+            pip install -r requirements.txt --quiet
+            sudo systemctl restart api-om
+            echo "Deploy concluído: $(date)"
