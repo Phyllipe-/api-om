@@ -1,6 +1,6 @@
 import os
 from datetime import timedelta
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
@@ -56,6 +56,20 @@ def create_app():
 
     # ── Handler genérico de erros (não vaza stack trace) ─────────────────────
     is_dev = os.environ.get('FLASK_ENV', 'production') == 'development'
+
+    @app.route('/')
+    def index():
+        return jsonify({"status": "API OM online", "versao": "1.0", "docs": "/docs"}), 200
+
+    @app.errorhandler(404)
+    def handle_not_found(e):
+        import logging
+        logging.warning("404 Not Found: %s %s", request.method, request.path)
+        return jsonify({"erro": f"Rota não encontrada: {request.method} {request.path}"}), 404
+
+    @app.errorhandler(405)
+    def handle_method_not_allowed(e):
+        return jsonify({"erro": f"Método {request.method} não permitido em {request.path}"}), 405
 
     @app.errorhandler(Exception)
     def handle_unexpected(e):
