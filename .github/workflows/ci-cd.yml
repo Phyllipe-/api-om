@@ -50,8 +50,11 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /opt/api-om
-            git pull origin main
+            git pull origin master
             source venv/bin/activate
             pip install -r requirements.txt --quiet
+            python scripts/sistema/migrate.py
             sudo systemctl restart api-om
+            sleep 3
+            systemctl is-active --quiet api-om && echo "✅ Serviço ativo" || (echo "❌ Falhou" && exit 1)
             echo "Deploy concluído: $(date)"
