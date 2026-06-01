@@ -71,9 +71,11 @@ def validar_conteudo(arquivo, extensoes_permitidas):
 
 def salvar_arquivo_seguro(arquivo, subpasta, config_upload_folder):
     """
-    Sanitiza o nome, salva na pasta correta e devolve o caminho relativo.
+    Sanitiza o nome, garante que a pasta existe, salva e devolve o caminho relativo.
     """
     nome_seguro = secure_filename(arquivo.filename)
-    caminho_completo = os.path.join(config_upload_folder, subpasta, nome_seguro)
+    pasta = os.path.join(config_upload_folder, subpasta)
+    os.makedirs(pasta, exist_ok=True)
+    caminho_completo = os.path.join(pasta, nome_seguro)
     arquivo.save(caminho_completo)
     return f"/{subpasta}/{nome_seguro}"
