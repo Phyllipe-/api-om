@@ -59,7 +59,10 @@ def create_app():
 
     @app.route('/')
     def index():
-        return jsonify({"status": "API OM online", "versao": "1.0", "docs": "/docs"}), 200
+        body = {"status": "API OM online", "versao": "1.0"}
+        if is_dev:
+            body["docs"] = "/docs"
+        return jsonify(body), 200
 
     @app.errorhandler(404)
     def handle_not_found(e):
