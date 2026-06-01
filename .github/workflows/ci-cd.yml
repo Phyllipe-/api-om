@@ -28,11 +28,11 @@ jobs:
       - name: Rodar testes
         run: pytest -v
         env:
-          DATABASE_URL: sqlite:///:memory:
-          JWT_SECRET_KEY: ci-secret-key-apenas-para-testes
-          ALLOWED_ORIGINS: http://localhost:3000
-          FLASK_ENV: testing
-          REGISTRO_PUBLICO: 'false'
+          DATABASE_URL: "sqlite:///:memory:"
+          JWT_SECRET_KEY: "ci-secret-key-apenas-para-testes"
+          ALLOWED_ORIGINS: "http://localhost:3000"
+          FLASK_ENV: "testing"
+          REGISTRO_PUBLICO: "false"
 
   # ── DEPLOY PRODUÇÃO (apenas main) ─────────────────────────────────────────────
   deploy:
