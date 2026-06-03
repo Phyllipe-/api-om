@@ -2,6 +2,7 @@ import logging
 from flask import Blueprint, request, jsonify, current_app, send_from_directory
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt, verify_jwt_in_request
 from datetime import datetime
+from werkzeug.utils import secure_filename
 import os, json
 
 from app import db, limiter
@@ -677,7 +678,20 @@ def receber_render3d(id_mapa):
         pasta = os.path.join(current_app.config['UPLOAD_FOLDER'], 'renders3d')
         os.makedirs(pasta, exist_ok=True)
 
-        caminho = salvar_arquivo_seguro(arquivo, 'renders3d', current_app.config['UPLOAD_FOLDER'])
+        # Remove render anterior se existir
+        if mapa.caminho_render_3d:
+            caminho_antigo = os.path.join(current_app.config['UPLOAD_FOLDER'],
+                                          mapa.caminho_render_3d.lstrip('/'))
+            if os.path.exists(caminho_antigo):
+                os.remove(caminho_antigo)
+
+        # Gera nome único baseado no id_mapa para evitar sobrescrita
+        extensao = os.path.splitext(secure_filename(arquivo.filename))[1] or '.png'
+        nome_arquivo = f"render3d_mapa_{id_mapa}{extensao}"
+        caminho_completo = os.path.join(pasta, nome_arquivo)
+        arquivo.save(caminho_completo)
+
+        caminho = f"/renders3d/{nome_arquivo}"
         mapa.caminho_render_3d = caminho
         db.session.commit()
 
