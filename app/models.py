@@ -143,7 +143,7 @@ class Quadro(db.Model):
     ordem_padrao          = db.Column(db.Integer,  nullable=False, default=0)
     ativo_padrao          = db.Column(db.Boolean,  nullable=False, default=True)
     personalizavel        = db.Column(db.Boolean,  nullable=False, default=True)
-    exclusivo_sessao_unica = db.Column(db.Boolean, nullable=False, default=False)
+    exclusivo_sessao_unica = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
 
 class PreferenciaQuadro(db.Model):
     __tablename__ = 'preferencia_quadro'
