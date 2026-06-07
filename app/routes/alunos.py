@@ -1,9 +1,10 @@
+import os
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from datetime import datetime
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt, create_access_token
+from datetime import datetime, timedelta
 
-from app import db
+from app import db, limiter
 from app.models import Usuario, Professor, Aluno, TipoPessoa
 
 alunos_bp = Blueprint('alunos', __name__)
@@ -276,6 +277,76 @@ def apropriar_aluno(id_aluno):
     aluno.id_professor_responsavel = professor.id_professor
     db.session.commit()
     return jsonify({"id_aluno": id_aluno, "id_professor": professor.id_professor}), 200
+
+
+# ==========================================
+# LINK DE PRÁTICA AUTÔNOMA (App Link)
+# O professor emite um link válido por 48h. O aluno abre no próprio
+# aparelho (deep link), o app RESGATA no servidor (valida as 48h) e a
+# partir daí pratica sozinho até "Encerrar Sessão" — sem prazo de uso.
+# Sem estado no banco: as 48h são o `exp` do JWT do link.
+# ==========================================
+_LINK_VALIDADE_HORAS = 48
+
+
+@alunos_bp.route('/<int:id_aluno>/link-pratica', methods=['POST'])
+@jwt_required()
+def gerar_link_pratica(id_aluno):
+    id_usuario_logado = get_jwt_identity()
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    aluno = Aluno.query.filter_by(
+        id_aluno=id_aluno, id_professor_responsavel=professor.id_professor
+    ).first()
+    if not aluno:
+        return jsonify({"erro": "Aluno não encontrado ou sem permissão."}), 404
+
+    usr = Usuario.query.get(aluno.id_usuario)
+    if not usr or not usr.ativo:
+        return jsonify({"erro": "Aluno inativo ou inexistente."}), 404
+
+    login = _login_efetivo(aluno, usr)
+    token = create_access_token(
+        identity=str(aluno.id_aluno),
+        additional_claims={"tipo": "link_pratica", "id_aluno": aluno.id_aluno, "login": login},
+        expires_delta=timedelta(hours=_LINK_VALIDADE_HORAS),
+    )
+
+    base = os.environ.get('APP_LINK_BASE', 'https://mova.omaproject.com.br/ena/pratica')
+    url = f"{base}?t={token}"
+    expira_em = (datetime.utcnow() + timedelta(hours=_LINK_VALIDADE_HORAS)).isoformat() + "Z"
+
+    return jsonify({
+        "url": url,
+        "token": token,
+        "expira_em": expira_em,
+        "validade_horas": _LINK_VALIDADE_HORAS,
+        "aluno": {"id_aluno": aluno.id_aluno, "nome_completo": usr.nome_completo, "login": login},
+    }), 201
+
+
+@alunos_bp.route('/link/resgatar', methods=['POST'])
+@limiter.limit("20 per minute; 100 per hour")
+@jwt_required()
+def resgatar_link_pratica():
+    # jwt_required já valida assinatura e expiração (as 48h). Link vencido → 401.
+    claims = get_jwt()
+    if claims.get('tipo') != 'link_pratica':
+        return jsonify({"erro": "Este token não é um link de prática."}), 403
+
+    id_aluno = claims.get('id_aluno') or int(get_jwt_identity())
+    aluno = Aluno.query.get(id_aluno)
+    usr = Usuario.query.get(aluno.id_usuario) if aluno else None
+    if not aluno or not usr or not usr.ativo:
+        return jsonify({"erro": "Aluno do link não encontrado ou inativo."}), 404
+
+    return jsonify({
+        "id_aluno":      aluno.id_aluno,
+        "nome_completo": usr.nome_completo,
+        "login":         _login_efetivo(aluno, usr),
+    }), 200
 
 
 # ==========================================
