@@ -5,8 +5,9 @@ from datetime import datetime
 from werkzeug.utils import secure_filename
 import os, json
 
+from sqlalchemy import func
 from app import db, limiter
-from app.models import Professor, Aluno, Mapa, LogSessao, TipoPessoa, Usuario
+from app.models import Professor, Aluno, Mapa, LogSessao, TipoPessoa, Usuario, AvaliacaoMapa
 from app.utils import arquivo_permitido, salvar_arquivo_seguro, EXTENSOES_MAPA
 
 log = logging.getLogger(__name__)
@@ -82,25 +83,69 @@ def registar_mapa():
 @treinos_bp.route('/mapas', methods=['GET'])
 @jwt_required()
 def listar_mapas():
-    mapas = Mapa.query.order_by(Mapa.data_criacao.desc()).all()
-    lista_mapas = []
+    # "Todos os mapas": somente mapas PÚBLICOS e ativos.
+    # Sem busca → top 5 por média de avaliação. Com busca (nome / nota_min / ordem
+    # por data) → todos os públicos que casam, ordenados.
+    id_usuario_logado = get_jwt_identity()
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+    prof_id = professor.id_professor if professor else None
 
-    for mapa in mapas:
-        prof = Professor.query.get(mapa.id_criador)
+    q        = request.args.get('q', '').strip().lower()
+    nota_min = request.args.get('nota_min', type=float)
+    ordem    = request.args.get('ordem', '').strip()  # '', 'recentes', 'antigos'
+    modo_busca = bool(q) or (nota_min is not None) or (ordem in ('recentes', 'antigos'))
+
+    mapas = Mapa.query.filter_by(publico=True, ativo=True).all()
+
+    # Médias e total de avaliações (uma query agregada).
+    rows = (db.session.query(AvaliacaoMapa.id_mapa,
+                             func.avg(AvaliacaoMapa.nota),
+                             func.count(AvaliacaoMapa.id_avaliacao))
+            .group_by(AvaliacaoMapa.id_mapa).all())
+    medias = {r[0]: (round(float(r[1]), 2), int(r[2])) for r in rows}
+    minhas = ({a.id_mapa: a.nota for a in AvaliacaoMapa.query.filter_by(id_professor=prof_id).all()}
+              if prof_id else {})
+
+    itens = []
+    for m in mapas:
+        media, total = medias.get(m.id_mapa, (0.0, 0))
+        if q and q not in m.nome_mapa.lower():
+            continue
+        if nota_min is not None and media < nota_min:
+            continue
+        itens.append((m, media, total))
+
+    if ordem == 'recentes':
+        itens.sort(key=lambda x: x[0].data_criacao, reverse=True)
+    elif ordem == 'antigos':
+        itens.sort(key=lambda x: x[0].data_criacao)
+    else:
+        itens.sort(key=lambda x: (x[1], x[2]), reverse=True)  # média, depois total
+
+    if not modo_busca:
+        itens = itens[:5]
+
+    lista_mapas = []
+    for m, media, total in itens:
+        prof = Professor.query.get(m.id_criador)
         usr = Usuario.query.get(prof.id_usuario) if prof else None
-        original = Mapa.query.get(mapa.id_mapa_original) if mapa.id_mapa_original else None
+        original = Mapa.query.get(m.id_mapa_original) if m.id_mapa_original else None
         prof_original = Professor.query.get(original.id_criador) if original else None
         usr_original  = Usuario.query.get(prof_original.id_usuario) if prof_original else None
         lista_mapas.append({
-            "id_mapa": mapa.id_mapa,
-            "nome_mapa": mapa.nome_mapa,
-            "caminho_arquivo_xml": mapa.caminho_arquivo_xml,
-            "caminho_preview": mapa.caminho_preview,
-            "data_criacao": mapa.data_criacao.strftime("%Y-%m-%d %H:%M"),
-            "ativo": mapa.ativo,
-            "id_criador": mapa.id_criador,
+            "id_mapa": m.id_mapa,
+            "nome_mapa": m.nome_mapa,
+            "caminho_arquivo_xml": m.caminho_arquivo_xml,
+            "caminho_preview": m.caminho_preview,
+            "data_criacao": m.data_criacao.strftime("%Y-%m-%d %H:%M"),
+            "ativo": m.ativo,
+            "publico": m.publico,
+            "id_criador": m.id_criador,
             "nome_professor": usr.nome_completo if usr else "—",
-            "id_mapa_original":        mapa.id_mapa_original,
+            "nota_media": media,
+            "total_avaliacoes": total,
+            "minha_nota": minhas.get(m.id_mapa),
+            "id_mapa_original":        m.id_mapa_original,
             "nome_mapa_original":      original.nome_mapa          if original     else None,
             "nome_professor_original": usr_original.nome_completo  if usr_original else None,
         })
@@ -120,12 +165,19 @@ def listar_meus_mapas():
         return jsonify({"erro": "Perfil de professor não encontrado."}), 404
 
     mapas = Mapa.query.filter_by(id_criador=professor.id_professor).order_by(Mapa.data_criacao.desc()).all()
-    lista_mapas = []
 
+    ids = [m.id_mapa for m in mapas]
+    rows = (db.session.query(AvaliacaoMapa.id_mapa, func.avg(AvaliacaoMapa.nota), func.count(AvaliacaoMapa.id_avaliacao))
+            .filter(AvaliacaoMapa.id_mapa.in_(ids)).group_by(AvaliacaoMapa.id_mapa).all()) if ids else []
+    medias = {r[0]: (round(float(r[1]), 2), int(r[2])) for r in rows}
+    minhas = {a.id_mapa: a.nota for a in AvaliacaoMapa.query.filter_by(id_professor=professor.id_professor).all()}
+
+    lista_mapas = []
     for mapa in mapas:
         original = Mapa.query.get(mapa.id_mapa_original) if mapa.id_mapa_original else None
         prof_original = Professor.query.get(original.id_criador) if original else None
         usr_original  = Usuario.query.get(prof_original.id_usuario) if prof_original else None
+        media, total = medias.get(mapa.id_mapa, (0.0, 0))
         lista_mapas.append({
             "id_mapa": mapa.id_mapa,
             "nome_mapa": mapa.nome_mapa,
@@ -133,12 +185,76 @@ def listar_meus_mapas():
             "caminho_preview": mapa.caminho_preview,
             "data_criacao": mapa.data_criacao.strftime("%Y-%m-%d %H:%M"),
             "ativo": mapa.ativo,
+            "publico": mapa.publico,
+            "nota_media": media,
+            "total_avaliacoes": total,
+            "minha_nota": minhas.get(mapa.id_mapa),
             "id_mapa_original":        mapa.id_mapa_original,
             "nome_mapa_original":      original.nome_mapa          if original     else None,
             "nome_professor_original": usr_original.nome_completo  if usr_original else None,
         })
 
     return jsonify({"total": len(lista_mapas), "mapas": lista_mapas}), 200
+
+
+# ==========================================
+# VISIBILIDADE: público/privado (somente criador ou admin)
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/visibilidade', methods=['PATCH'])
+@jwt_required()
+def set_visibilidade_mapa(id_mapa):
+    id_usuario_logado = get_jwt_identity()
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+
+    mapa = Mapa.query.get(id_mapa)
+    if not mapa:
+        return jsonify({"erro": "Mapa não encontrado."}), 404
+
+    eh_admin = int(id_usuario_logado) == 1
+    if not eh_admin and (not professor or mapa.id_criador != professor.id_professor):
+        return jsonify({"erro": "Apenas o criador pode alterar a visibilidade."}), 403
+
+    dados = request.get_json(silent=True) or {}
+    mapa.publico = bool(dados.get('publico'))
+    db.session.commit()
+    return jsonify({"id_mapa": id_mapa, "publico": mapa.publico}), 200
+
+
+# ==========================================
+# AVALIAR MAPA PÚBLICO (0-3 estrelas; 1 voto por professor)
+# ==========================================
+@treinos_bp.route('/mapas/<int:id_mapa>/avaliar', methods=['POST'])
+@jwt_required()
+def avaliar_mapa(id_mapa):
+    id_usuario_logado = get_jwt_identity()
+    professor = Professor.query.filter_by(id_usuario=id_usuario_logado).first()
+    if not professor:
+        return jsonify({"erro": "Perfil de professor não encontrado."}), 404
+
+    mapa = Mapa.query.get(id_mapa)
+    if not mapa or not mapa.publico:
+        return jsonify({"erro": "Mapa público não encontrado."}), 404
+
+    dados = request.get_json(silent=True) or {}
+    try:
+        nota = int(dados.get('nota'))
+    except (TypeError, ValueError):
+        return jsonify({"erro": "Nota inválida."}), 400
+    if nota < 0 or nota > 3:
+        return jsonify({"erro": "A nota deve ser de 0 a 3."}), 400
+
+    av = AvaliacaoMapa.query.filter_by(id_mapa=id_mapa, id_professor=professor.id_professor).first()
+    if av:
+        av.nota = nota
+        av.data = datetime.utcnow()
+    else:
+        db.session.add(AvaliacaoMapa(id_mapa=id_mapa, id_professor=professor.id_professor, nota=nota))
+    db.session.commit()
+
+    agg = (db.session.query(func.avg(AvaliacaoMapa.nota), func.count(AvaliacaoMapa.id_avaliacao))
+           .filter(AvaliacaoMapa.id_mapa == id_mapa).first())
+    media = round(float(agg[0]), 2) if agg[0] is not None else 0.0
+    return jsonify({"id_mapa": id_mapa, "nota_media": media, "total_avaliacoes": int(agg[1]), "minha_nota": nota}), 200
 
 
 # ==========================================

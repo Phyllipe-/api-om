@@ -68,6 +68,20 @@ class Mapa(db.Model):
     caminho_render_3d   = db.Column(db.String(500), nullable=True)  # captura 3D gerada pelo ENA em runtime
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
     ativo = db.Column(db.Boolean, default=True, nullable=False, server_default='true')
+    # Visibilidade: privado (padrão) ou público. Públicos podem ser avaliados e
+    # aparecem na aba "Todos os mapas" (top 5 / busca).
+    publico = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
+
+
+class AvaliacaoMapa(db.Model):
+    __tablename__ = 'avaliacao_mapa'
+    id_avaliacao = db.Column(db.Integer, primary_key=True)
+    id_mapa      = db.Column(db.Integer, db.ForeignKey('mapa.id_mapa'), nullable=False)
+    id_professor = db.Column(db.Integer, db.ForeignKey('professor.id_professor'), nullable=False)
+    nota         = db.Column(db.Integer, nullable=False)  # 0 a 3 estrelas
+    data         = db.Column(db.DateTime, default=datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint('id_mapa', 'id_professor', name='uq_avaliacao_mapa_prof'),)
+
 
 class LogSessao(db.Model):
     __tablename__ = 'log_sessao'
