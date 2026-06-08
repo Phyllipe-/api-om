@@ -24,6 +24,7 @@ def _aluno_dict(aluno, usr):
     return {
         "id_aluno": aluno.id_aluno,
         "nome_completo": usr.nome_completo,
+        "nome_social": usr.nome_social,
         "email": usr.email,
         "login": _login_efetivo(aluno, usr),
         "idade": idade,
@@ -79,6 +80,7 @@ def cadastrar_aluno():
         novo_usuario = Usuario(
             id_tipo=tipo_aluno.id_tipo,
             nome_completo=dados['nome_completo'],
+            nome_social=(dados.get('nome_social') or '').strip() or None,
             data_nascimento=data_nasc,
             email=dados['email'],
             senha_hash=generate_password_hash(dados['senha'])
@@ -235,6 +237,11 @@ def buscar_todos():
             if not any(q in c for c in campos):
                 continue
 
+        is_meu = aluno.id_professor_responsavel == id_prof_atual
+        # LGPD: aluno menor de idade só é visível ao professor responsável e ao admin.
+        if aluno.menor_idade and not is_meu and id_usuario_logado != 1:
+            continue
+
         prof = Professor.query.get(aluno.id_professor_responsavel)
         prof_usr = Usuario.query.get(prof.id_usuario) if prof else None
 
@@ -246,14 +253,16 @@ def buscar_todos():
         resultado.append({
             "id_aluno":      aluno.id_aluno,
             "nome_completo": usr.nome_completo,
+            "nome_social":   usr.nome_social,
             "email":         usr.email,
             "login":         aluno.login or usr.email.split('@')[0],
             "escolaridade":  aluno.escolaridade,
             "ativo":         usr.ativo,
             "idade":         idade,
+            "menor_idade":   aluno.menor_idade,
             "professor":     prof_usr.nome_completo if prof_usr else "—",
             "id_professor":  aluno.id_professor_responsavel,
-            "is_meu":        aluno.id_professor_responsavel == id_prof_atual,
+            "is_meu":        is_meu,
         })
 
     resultado.sort(key=lambda x: x["nome_completo"].lower())
@@ -431,6 +440,9 @@ def editar_aluno(id_aluno):
 
     if 'nome_completo' in dados and dados['nome_completo'].strip():
         usr.nome_completo = dados['nome_completo'].strip()
+
+    if 'nome_social' in dados:
+        usr.nome_social = (dados['nome_social'] or '').strip() or None
 
     if 'email' in dados and dados['email'].strip():
         novo_email = dados['email'].strip()

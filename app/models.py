@@ -15,6 +15,8 @@ class Usuario(db.Model):
     id_usuario = db.Column(db.Integer, primary_key=True)
     id_tipo = db.Column(db.Integer, db.ForeignKey('tipo_pessoa.id_tipo'), nullable=False)
     nome_completo = db.Column(db.String(150), nullable=False)
+    # Nome social (opcional): nome pelo qual a pessoa prefere ser tratada.
+    nome_social = db.Column(db.String(150), nullable=True)
     # Opcional: deixou de ser coletada (minimização LGPD). Mantida para registros antigos.
     data_nascimento = db.Column(db.Date, nullable=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
