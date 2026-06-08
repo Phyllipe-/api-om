@@ -20,6 +20,8 @@ class Usuario(db.Model):
     senha_hash = db.Column(db.String(255), nullable=False)
     ativo = db.Column(db.Boolean, default=True)
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
+    # Senha provisória definida pelo admin → força troca no primeiro login.
+    senha_provisoria = db.Column(db.Boolean, nullable=False, server_default=db.text('false'))
 
 class Professor(db.Model):
     __tablename__ = 'professor'

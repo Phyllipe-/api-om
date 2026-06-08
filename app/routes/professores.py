@@ -102,6 +102,8 @@ def editar_professor(id_professor):
 
     if 'nova_senha' in dados and dados['nova_senha']:
         usr.senha_hash = generate_password_hash(dados['nova_senha'])
+        # Senha definida pelo admin → força troca no 1º login (se senha_provisoria=true).
+        usr.senha_provisoria = bool(dados.get('senha_provisoria', False))
 
     if 'ativo' in dados:
         # Impede desativar o próprio admin
@@ -179,3 +181,32 @@ def remover_professor(id_professor):
     except Exception as e:
         db.session.rollback()
         return jsonify({"erro": f"Falha ao remover: {str(e)}"}), 500
+
+
+# ==========================================
+# ROTA 6: GERAR LINK DE REDEFINIÇÃO DE SENHA (admin envia ao professor)
+# ==========================================
+@professores_bp.route('/<int:id_professor>/link-reset', methods=['POST'])
+@jwt_required()
+def gerar_link_reset(id_professor):
+    _, err = _require_admin()
+    if err:
+        return err
+
+    prof = Professor.query.get(id_professor)
+    if not prof:
+        return jsonify({"erro": "Professor não encontrado."}), 404
+
+    usr = Usuario.query.get(prof.id_usuario)
+    if not usr:
+        return jsonify({"erro": "Usuário do professor não encontrado."}), 404
+
+    # Lazy import evita qualquer ciclo entre blueprints.
+    from app.routes.auth import _gerar_token_reset, _url_reset, _RESET_VALIDADE_HORAS
+
+    token = _gerar_token_reset(usr)
+    return jsonify({
+        "url": _url_reset(token),
+        "validade_horas": _RESET_VALIDADE_HORAS,
+        "professor": {"id_professor": id_professor, "nome": usr.nome_completo, "email": usr.email},
+    }), 201
