@@ -15,16 +15,19 @@ def _login_efetivo(aluno, usr):
 
 
 def _aluno_dict(aluno, usr):
-    hoje = datetime.now().date()
-    idade = hoje.year - usr.data_nascimento.year - (
-        (hoje.month, hoje.day) < (usr.data_nascimento.month, usr.data_nascimento.day)
-    )
+    idade = None
+    if usr.data_nascimento:
+        hoje = datetime.now().date()
+        idade = hoje.year - usr.data_nascimento.year - (
+            (hoje.month, hoje.day) < (usr.data_nascimento.month, usr.data_nascimento.day)
+        )
     return {
         "id_aluno": aluno.id_aluno,
         "nome_completo": usr.nome_completo,
         "email": usr.email,
         "login": _login_efetivo(aluno, usr),
         "idade": idade,
+        "menor_idade": aluno.menor_idade,
         "data_nascimento": usr.data_nascimento.strftime('%Y-%m-%d') if usr.data_nascimento else None,
         "escolaridade": aluno.escolaridade,
         "telefone":   aluno.telefone,
@@ -52,9 +55,14 @@ def cadastrar_aluno():
         return jsonify({"erro": "Perfil de professor não encontrado."}), 404
 
     dados = request.get_json()
-    for campo in ['nome_completo', 'data_nascimento', 'email', 'senha']:
+    for campo in ['nome_completo', 'email', 'senha']:
         if campo not in dados:
             return jsonify({"erro": f"O campo {campo} é obrigatório."}), 400
+
+    # Maioridade: marca menor + exige a declaração do professor (registro/auditoria).
+    menor = bool(dados.get('menor_idade'))
+    if menor and not dados.get('declaracao'):
+        return jsonify({"erro": "Para alunos menores de idade, a declaração do professor é obrigatória."}), 400
 
     if Usuario.query.filter_by(email=dados['email']).first():
         return jsonify({"erro": "Já existe um utilizador com este email."}), 409
@@ -65,7 +73,8 @@ def cadastrar_aluno():
 
     try:
         tipo_aluno = TipoPessoa.query.filter_by(descricao="Aluno").first()
-        data_nasc = datetime.strptime(dados['data_nascimento'], '%Y-%m-%d').date()
+        # data_nascimento não é mais coletada (minimização); aceita se vier (legado).
+        data_nasc = datetime.strptime(dados['data_nascimento'], '%Y-%m-%d').date() if dados.get('data_nascimento') else None
 
         novo_usuario = Usuario(
             id_tipo=tipo_aluno.id_tipo,
@@ -85,6 +94,9 @@ def cadastrar_aluno():
             telefone=dados.get('telefone') or None,
             cep=dados.get('cep') or None,
             logradouro=dados.get('logradouro') or None,
+            menor_idade=menor,
+            declaracao_em=(datetime.utcnow() if menor else None),
+            declaracao_por=(int(id_usuario_logado) if menor else None),
         )
         db.session.add(novo_aluno)
         db.session.commit()
@@ -445,6 +457,12 @@ def editar_aluno(id_aluno):
     if 'nova_senha' in dados and dados['nova_senha']:
         from werkzeug.security import generate_password_hash
         usr.senha_hash = generate_password_hash(dados['nova_senha'])
+
+    if 'menor_idade' in dados:
+        aluno.menor_idade = bool(dados['menor_idade'])
+        if aluno.menor_idade and dados.get('declaracao'):
+            aluno.declaracao_em = datetime.utcnow()
+            aluno.declaracao_por = int(id_usuario_logado)
 
     db.session.commit()
     return jsonify(_aluno_dict(aluno, usr)), 200

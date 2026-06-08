@@ -70,7 +70,7 @@ def register_professor():
         return jsonify({"erro": "Apenas o administrador pode cadastrar novos professores."}), 403
 
     dados = request.get_json()
-    for campo in ('nome_completo', 'data_nascimento', 'email', 'senha'):
+    for campo in ('nome_completo', 'email', 'senha'):
         if not dados.get(campo):
             return jsonify({"erro": f"O campo '{campo}' é obrigatório."}), 400
 
@@ -82,7 +82,7 @@ def register_professor():
 
     try:
         tipo_prof  = TipoPessoa.query.filter_by(descricao="Professor").first()
-        data_nasc  = datetime.strptime(dados['data_nascimento'], '%Y-%m-%d').date()
+        data_nasc  = datetime.strptime(dados['data_nascimento'], '%Y-%m-%d').date() if dados.get('data_nascimento') else None
         novo_usuario = Usuario(
             id_tipo         = tipo_prof.id_tipo,
             nome_completo   = dados['nome_completo'],
@@ -112,7 +112,7 @@ def register_professor_publico():
         return jsonify({"erro": "Registro público desabilitado."}), 403
 
     dados = request.get_json()
-    for campo in ('nome_completo', 'data_nascimento', 'email', 'senha'):
+    for campo in ('nome_completo', 'email', 'senha'):
         if not dados.get(campo):
             return jsonify({"erro": f"O campo '{campo}' é obrigatório."}), 400
 

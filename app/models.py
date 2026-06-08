@@ -15,7 +15,8 @@ class Usuario(db.Model):
     id_usuario = db.Column(db.Integer, primary_key=True)
     id_tipo = db.Column(db.Integer, db.ForeignKey('tipo_pessoa.id_tipo'), nullable=False)
     nome_completo = db.Column(db.String(150), nullable=False)
-    data_nascimento = db.Column(db.Date, nullable=False)
+    # Opcional: deixou de ser coletada (minimização LGPD). Mantida para registros antigos.
+    data_nascimento = db.Column(db.Date, nullable=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     senha_hash = db.Column(db.String(255), nullable=False)
     ativo = db.Column(db.Boolean, default=True)
@@ -45,6 +46,11 @@ class Aluno(db.Model):
     telefone   = db.Column(db.String(20),  nullable=True)
     cep        = db.Column(db.String(9),   nullable=True)
     logradouro = db.Column(db.String(300), nullable=True)
+    # Maioridade declarada no cadastro (em vez da data de nascimento).
+    menor_idade   = db.Column(db.Boolean, nullable=True)
+    # Para menores: declaração do professor que cadastrou (trilha de auditoria LGPD).
+    declaracao_em  = db.Column(db.DateTime, nullable=True)
+    declaracao_por = db.Column(db.Integer, nullable=True)  # id_usuario que declarou
 
 # -----------------------------------------
 # TABELAS DE OPERAÇÃO E LOGS (REFERÊNCIAS)
