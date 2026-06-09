@@ -215,4 +215,17 @@ with app.app_context():
     else:
         skip("mapa.id_mapa_original já existe.")
 
+    # ── M012 — Adicionar coluna `parametros` (JSON) em `quadro` ──────────
+    print("M012: coluna parametros em quadro")
+    existe = db.session.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='quadro' AND column_name='parametros'"
+    )).scalar()
+    if not existe:
+        db.session.execute(text("ALTER TABLE quadro ADD COLUMN parametros TEXT"))
+        db.session.commit()
+        ok("Coluna 'parametros' adicionada em quadro.")
+    else:
+        skip("quadro.parametros já existe.")
+
     print("\nMigrações concluídas.")

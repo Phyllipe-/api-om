@@ -1,9 +1,19 @@
+import json
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app import db
 from app.models import Quadro, PreferenciaQuadro, Professor, Usuario
 
 quadros_bp = Blueprint('quadros', __name__)
+
+
+def _parse_parametros(q):
+    if not q.parametros:
+        return None
+    try:
+        return json.loads(q.parametros)
+    except (ValueError, TypeError):
+        return None
 
 
 def _quadro_dict(q):
@@ -17,6 +27,7 @@ def _quadro_dict(q):
         "ativo_padrao":           q.ativo_padrao,
         "personalizavel":         q.personalizavel,
         "exclusivo_sessao_unica": q.exclusivo_sessao_unica,
+        "parametros":             _parse_parametros(q),
     }
 
 
@@ -66,6 +77,15 @@ def editar_quadro(id_quadro):
     if 'exclusivo_sessao_unica' in dados:
         quadro.exclusivo_sessao_unica = bool(dados['exclusivo_sessao_unica'])
 
+    if 'parametros' in dados:
+        p = dados['parametros']
+        if p is None:
+            quadro.parametros = None
+        elif isinstance(p, dict):
+            quadro.parametros = json.dumps(p)
+        else:
+            return jsonify({"erro": "parametros deve ser um objeto ou nulo."}), 400
+
     db.session.commit()
     return jsonify(_quadro_dict(quadro)), 200
 
@@ -98,6 +118,7 @@ def get_preferencias():
             "ativo_padrao":           q.ativo_padrao,
             "personalizavel":         q.personalizavel,
             "exclusivo_sessao_unica": q.exclusivo_sessao_unica,
+            "parametros":             _parse_parametros(q),
             "visivel":                p.visivel if p else q.ativo_padrao,
             "ordem":                  p.ordem   if p else q.ordem_padrao,
         })

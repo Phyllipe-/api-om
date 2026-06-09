@@ -168,6 +168,7 @@ class Quadro(db.Model):
     ativo_padrao          = db.Column(db.Boolean,  nullable=False, default=True)
     personalizavel        = db.Column(db.Boolean,  nullable=False, default=True)
     exclusivo_sessao_unica = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    parametros     = db.Column(db.Text, nullable=True)   # JSON de parâmetros (ex.: dimensões comportamentais)
 
 class PreferenciaQuadro(db.Model):
     __tablename__ = 'preferencia_quadro'
