@@ -2,9 +2,11 @@
 Limpa o banco de dados, mantendo apenas o usuário inicial (id_usuario = 1)
 e seu registro de professor associado.
 
+Tabelas de REFERÊNCIA são preservadas: tipo_pessoa, quadro.
+
 Uso:
-    python scripts/limpar_db.py
-    python scripts/limpar_db.py --confirmar   # pula confirmação interativa
+    python scripts/manutencao/limpar_db.py
+    python scripts/manutencao/limpar_db.py --confirmar   # pula confirmação interativa
 """
 
 import sys, os
@@ -15,20 +17,43 @@ from sqlalchemy import text
 
 app = create_app()
 
+# Ordem de exclusão (filhos → pais), respeitando as FKs do schema atual.
+# NÃO inclui as tabelas de referência (tipo_pessoa, quadro), que são preservadas.
+ORDEM_DELETE = [
+    # análises (dependem de log_sessao)
+    "comparacao", "giros", "lateralidade", "simulacao_trajetoria", "trafego",
+    # sessões
+    "log_sessao",
+    # vínculos e avaliações (dependem de atividade/mapa/professor)
+    "atividade_aluno", "atividade_mapa", "avaliacao_mapa",
+    # atividades e mapas
+    "atividade", "mapa",
+    # preferências de quadro por usuário
+    "preferencia_quadro",
+    # alunos
+    "aluno",
+]
+
+# Tabelas mostradas nas contagens (dados operacionais).
+TABELAS_DADOS = ORDEM_DELETE + ["professor", "usuario"]
+# Tabelas de referência preservadas.
+TABELAS_REFERENCIA = ["tipo_pessoa", "quadro"]
+
+
+def contar(rotulo):
+    print(rotulo)
+    for t in TABELAS_DADOS:
+        c = db.session.execute(text(f'SELECT COUNT(*) FROM "{t}"')).scalar()
+        print(f"  {t}: {c}")
+    print("  -- referência (preservadas) --")
+    for t in TABELAS_REFERENCIA:
+        c = db.session.execute(text(f'SELECT COUNT(*) FROM "{t}"')).scalar()
+        print(f"  {t}: {c}")
+
+
 with app.app_context():
 
-    # ── Contagens antes ───────────────────────────────────────────────────
-    tabelas = [
-        "comparacao", "giros", "trafego", "simulacao_trajetoria", "lateralidade",
-        "log_sessao", "atividade_aluno", "atividade_mapa", "atividade",
-        "mapa", "aluno", "professor", "usuario",
-    ]
-
-    print("Estado atual do banco:")
-    for t in tabelas:
-        count = db.session.execute(text(f'SELECT COUNT(*) FROM "{t}"')).scalar()
-        print(f"  {t}: {count}")
-
+    contar("Estado atual do banco:")
     print()
 
     # ── Confirmação ───────────────────────────────────────────────────────
@@ -38,50 +63,23 @@ with app.app_context():
             print("Operação cancelada.")
             sys.exit(0)
 
-    # ── Limpeza em ordem (respeita FKs) ──────────────────────────────────
+    # ── Limpeza atômica em ordem de FK ────────────────────────────────────
+    try:
+        for t in ORDEM_DELETE:
+            db.session.execute(text(f'DELETE FROM "{t}"'))
 
-    # 1. Análises (dependem de log_sessao)
-    for t in ["comparacao", "giros", "trafego", "simulacao_trajetoria", "lateralidade"]:
-        db.session.execute(text(f'DELETE FROM "{t}"'))
+        # Professores e usuários extras (mantém id_usuario = 1)
+        db.session.execute(text('DELETE FROM "professor" WHERE id_usuario != 1'))
+        db.session.execute(text('DELETE FROM "usuario" WHERE id_usuario != 1'))
 
-    # 2. Sessões
-    db.session.execute(text('DELETE FROM "log_sessao"'))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
 
-    # 3. Vínculos de atividade
-    db.session.execute(text('DELETE FROM "atividade_aluno"'))
-    db.session.execute(text('DELETE FROM "atividade_mapa"'))
+    print()
+    contar("Estado após limpeza:")
 
-    # 4. Atividades
-    db.session.execute(text('DELETE FROM "atividade"'))
-
-    # 5. Mapas
-    db.session.execute(text('DELETE FROM "mapa"'))
-
-    # 6. Alunos (e seus usuários)
-    alunos_ids = [r[0] for r in db.session.execute(text('SELECT id_usuario FROM "aluno"')).fetchall()]
-    db.session.execute(text('DELETE FROM "aluno"'))
-
-    # 7. Professores extras (id_usuario != 1)
-    profs_ids = [r[0] for r in db.session.execute(
-        text('SELECT id_usuario FROM "professor" WHERE id_usuario != 1')
-    ).fetchall()]
-    db.session.execute(text('DELETE FROM "professor" WHERE id_usuario != 1'))
-
-    # 8. Usuários extras (mantém id_usuario = 1)
-    ids_remover = list(set(alunos_ids + profs_ids))
-    if ids_remover:
-        placeholders = ", ".join(str(i) for i in ids_remover)
-        db.session.execute(text(f'DELETE FROM "usuario" WHERE id_usuario IN ({placeholders})'))
-
-    db.session.commit()
-
-    # ── Contagens depois ──────────────────────────────────────────────────
-    print("\nEstado após limpeza:")
-    for t in tabelas:
-        count = db.session.execute(text(f'SELECT COUNT(*) FROM "{t}"')).scalar()
-        print(f"  {t}: {count}")
-
-    # Confirmar usuário remanescente
-    usr = db.session.execute(text('SELECT id_usuario, email FROM "usuario"')).fetchall()
+    usr = db.session.execute(text('SELECT id_usuario, email FROM "usuario" ORDER BY id_usuario')).fetchall()
     print(f"\nUsuários remanescentes: {usr}")
     print("\nLimpeza concluída.")
